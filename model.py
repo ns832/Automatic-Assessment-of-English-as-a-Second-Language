@@ -16,8 +16,9 @@ from transformers import AdamW, BertConfig
 from transformers import get_linear_schedule_with_warmup
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
-parser.add_argument('--question_path', type=str, help='Load path of question training data')
-parser.add_argument('--answer_path', type=str, help='Load path of answer training data')
+parser.add_argument('--prompts_path', type=str, help='Load path of question training data')
+parser.add_argument('--responses_path', type=str, help='Load path of answer training data')
+parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids')
 parser.add_argument('--batch_size', type=int, default=24, help='Specify the training batch size')
 parser.add_argument('--learning_rate', type=float, default=2e-5, help='Specify the initial learning rate')
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
@@ -36,48 +37,6 @@ def get_default_device():
     print(device)
     return device
 
-def load_dataset(args):
-    
-    questions, answers, train_data = [], [], []
-    with open(args.question_path) as f0, open(args.answer_path) as f1:
-        questions, answers = f0.readlines(), f1.readlines()
-        
-        # choose to permute half of the dataset
-        val = int(len(questions)/2)
-        
-        permuted_questions, permuted_answers = questions[:val], answers[:val]
-        non_permuted_questions, non_permuted_answers = questions[val + 1:], answers[val + 11:]
-    
-        for (question, answer) in zip(non_permuted_questions, non_permuted_answers):
-            train_data.append(question + ' [SEP] ' + answer)
-            
-        for (question, answer) in zip(permuted_questions, random.sample(permuted_answers, len(permuted_answers))):
-            train_data.append(question + ' [SEP] ' + answer)
-            
-    targets = torch.tensor([0] * val + [1] * val) # i.e. first half is on-topic, second half is off-topic
-    print("Dataset Loaded")
-    return train_data, targets
-
-
-def encode_data(bert_base_uncased, train_data, device, targets):
-    
-    tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
-    
-    for question in train_data:
-        encoding = tokenizer(question, return_tensors='pt', max_length = 512, padding="max_length", truncation=True)
-        input_ids = (encoding['input_ids']).clone().detach() # number ids for the words in the question
-        attention_mask = (encoding['attention_mask']).clone().detach() # 1 for question, 0 for answer
-        
-    if device == 'cuda':
-        input_ids.long().to(device)
-        attention_mask.long().to(device)
-        targets.long().to(device)
-        
-    print("Input_ids:", input_ids, "\n Attention_masks:", attention_mask)
-    train_dataset = TensorDataset(input_ids, attention_mask, targets)
-    return train_dataset
-
-
 def set_seed(args):
     seed_val = args.seed
     random.seed(seed_val)
@@ -85,6 +44,65 @@ def set_seed(args):
     torch.manual_seed(seed_val)
     torch.cuda.manual_seed_all(seed_val)
     return
+
+def load_dataset(args, device):
+    prompt_ids, response, train_data = [], [], []
+    with open(args.prompt_ids_path) as f0, open(args.responses_path) as f1, open(args.prompts_path) as f2:
+        prompt_ids, responses, prompts = f0.readlines(), f1.readlines(), f2.readlines()
+        
+        # choose to permute the dataset and concatenate it with the original dataset
+        val = int(len(prompt_ids))
+        prompt_ids = permute_data(prompt_ids, val, device)
+        responses += responses # since we doubled the prompt size
+    
+        # need to prevent answers being assigned to their original question
+        for (prompt_id, response) in zip(prompt_ids, responses):
+            train_data.append(prompts[int(prompt_id)] + ' [SEP] ' + response)
+            
+    targets = torch.tensor([0] * val + [1] * val) # i.e. first half is on-topic, second half is off-topic
+    print("Dataset Loaded")
+    return train_data, targets
+
+def permute_data(prompt_ids, val, device): 
+    # Dynamic shuffling in order to generate off-topic samples, based on prompt probability dist.
+    question_dist_path = '/home/alta/relevance/vr311/data_GKTS4_rnnlm/LINSKevl07/shuffled/'
+    unique_prompts_distribution_path = "/scratches/dialfs/alta/ns832/data/train_seen/training/topics_dist.txt" 
+    prompt_distribution = np.loadtxt(unique_prompts_distribution_path, dtype=np.int32)
+    prompt_distribution = prompt_distribution / np.linalg.norm(prompt_distribution, 1)
+    
+    number_of_questions = len(prompt_distribution)
+    new_prompt_ids = np.random.choice(number_of_questions, val, p=prompt_distribution)
+    
+    for i in range(val):
+        while (new_prompt_ids[i] == prompt_ids[i]):
+            new_prompt_ids[i] = np.random.choice(number_of_questions, 1, p=prompt_distribution)
+    prompt_ids += list(new_prompt_ids)
+    
+    return prompt_ids
+
+def encode_data(bert_base_uncased, train_data, device, targets):
+    
+    tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
+    input_ids, attention_mask = [], []
+    
+    for prompt_and_response in train_data:
+        encoding = tokenizer(prompt_and_response, max_length = 512, padding="max_length", truncation=True)
+        input_ids.append((encoding['input_ids'])) # number ids for the words in the question
+        attention_mask.append((encoding['attention_mask'])) # mask any padding tokens
+    
+    input_ids = torch.tensor(input_ids)
+    attention_mask = torch.tensor(attention_mask)
+    
+    if device == 'cuda':
+        input_ids.long().to(device)
+        attention_mask.long().to(device)
+        targets.long().to(device)
+        
+    print("Input_ids:", input_ids, "\n Attention_masks:", attention_mask)
+    print(targets.size(), input_ids.size(), attention_mask.size())
+    train_dataset = TensorDataset(input_ids, attention_mask, targets)
+    return train_dataset
+
 
 def configure_model(bert_base_uncased, device):
     model = BertForSequenceClassification.from_pretrained(
@@ -100,7 +118,8 @@ def configure_model(bert_base_uncased, device):
 def configure_optimiser(model, args):
     optimizer = AdamW(model.base_model.parameters(),
                     lr = args.learning_rate,
-                    eps = args.adam_epsilon
+                    eps = args.adam_epsilon,
+                    no_deprecation_warning=True
                     # weight_decay = 0.01
                     )
     return optimizer
@@ -110,7 +129,7 @@ def train_model(args, optimizer, model, device, train_dataset):
     # specify the sequence of indices/keys used in data loading,
     # want each epoch to have a different order to prevent over fitting
     train_sampler = RandomSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, train_sampler, batch_size=args.batch_size, shuffle=True)
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.batch_size)
     
     total_steps = len(train_dataloader) * args.n_epochs
     scheduler = get_linear_schedule_with_warmup(optimizer,
@@ -118,9 +137,8 @@ def train_model(args, optimizer, model, device, train_dataset):
                                                 num_training_steps = total_steps)
     
     model.train()
-    # labels = torch.tensor([0,1]).unsqueeze(0) # 0 being on-topic, 1 being off-topic
     
-    for epoch in args.n_epoch:
+    for epoch in range(args.n_epochs):
         print("")
         print('======== Epoch {:} / {:} ========'.format(epoch + 1, args.n_epochs))
         print('Training...')
@@ -159,7 +177,8 @@ def train_model(args, optimizer, model, device, train_dataset):
     return
 
 def save_model(args, model):
-    file_path = args.save_path +' bert_seed ' + str(args.seed) + '.pt'
+    file_path = str(args.save_path) + '/bert_seed_' + str(args.seed) + '.pt'
+    print(file_path)
     torch.save(model, file_path)
     return
 
@@ -168,7 +187,7 @@ def main(args):
     set_seed(args)
     
     device = get_default_device()
-    train_data, targets = load_dataset(args)
+    train_data, targets = load_dataset(args, device)
     train_dataset = encode_data(bert_base_uncased, train_data, device, targets)
     model = configure_model(bert_base_uncased, device)
     optimizer = configure_optimiser(model, args)
