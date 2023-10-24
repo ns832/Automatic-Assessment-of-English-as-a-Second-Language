@@ -16,11 +16,11 @@ parser.add_argument('--prompts_path', type=str, help='Load path of question trai
 parser.add_argument('--responses_path', type=str, help='Load path of answer training data')
 parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids')
 parser.add_argument('--batch_size', type=int, default=12, help='Specify the training batch size')
-parser.add_argument('--learning_rate', type=float, default=5e-5, help='Specify the initial learning rate')
+parser.add_argument('--learning_rate', type=float, default=1e-5, help='Specify the initial learning rate')
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
 parser.add_argument('--lr_decay', type=float, default=0.85, help='Specify the learning rate decay rate')
 parser.add_argument('--dropout', type=float, default=0.1, help='Specify the dropout rate')
-parser.add_argument('--n_epochs', type=int, default=10, help='Specify the number of epochs to train for')
+parser.add_argument('--n_epochs', type=int, default=1, help='Specify the number of epochs to train for')
 parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
 parser.add_argument('--save_path', type=str, help='Load path to which trained model will be saved')
 
@@ -55,7 +55,6 @@ def load_dataset(args, device):
         prompt_ids = permute_data(prompt_ids, val, device)
         responses += responses # since we doubled the prompt size
     
-        # need to prevent answers being assigned to their original question
         for (prompt_id, response) in zip(prompt_ids, responses):
             train_data.append(prompts[int(prompt_id)] + ' [SEP] ' + response)
             
@@ -66,7 +65,6 @@ def load_dataset(args, device):
 
 def permute_data(prompt_ids, val, device): 
     # Dynamic shuffling in order to generate off-topic samples, based on prompt probability dist.
-    question_dist_path = '/home/alta/relevance/vr311/data_GKTS4_rnnlm/LINSKevl07/shuffled/'
     unique_prompts_distribution_path = "/scratches/dialfs/alta/ns832/data/train_seen/training/topics_dist.txt" 
     prompt_distribution = np.loadtxt(unique_prompts_distribution_path, dtype=np.int32)
     prompt_distribution = prompt_distribution / np.linalg.norm(prompt_distribution, 1)
@@ -129,6 +127,7 @@ def configure_optimiser(model, args):
     return optimizer
 
 def plot_loss(args, loss_values):
+    
     fig = plt.figure(figsize=(8, 6))
     plt.plot(range(0, args.n_epochs), loss_values, marker='o', linestyle='-', color='b', label='Training Loss')
     plt.title('Training Loss vs Epoch')
@@ -177,6 +176,7 @@ def train_model(args, optimizer, model, device, train_dataset):
             # First compute the outputs given the current weights, and the current and total loss
             outputs = model(input_ids=b_input_ids, attention_mask=b_att_msks, labels=b_targets)
             loss = outputs.loss
+            loss_values.append(torch.tensor(loss, device = 'cpu'))
             total_loss += loss.item()
             print("loss.item is", loss.item())
             
@@ -187,7 +187,7 @@ def train_model(args, optimizer, model, device, train_dataset):
             scheduler.step()
         
     avg_train_loss = total_loss / len(train_dataloader)
-    loss_values.append(loss)
+    
     
     print("")
     print("  Average training loss: {0:.2f}".format(avg_train_loss))
@@ -198,7 +198,7 @@ def train_model(args, optimizer, model, device, train_dataset):
 
 
 def save_model(args, model):
-    file_path = str(args.save_path) + '/bert_seed_' + datetime.datetime.now() + str(args.seed) + '.pt'
+    file_path = str(args.save_path) + '/bert_seed_' + str(datetime.datetime.now()) + str(args.seed) + '.pt'
     print(file_path)
     torch.save(model, file_path)
     return
@@ -206,6 +206,7 @@ def save_model(args, model):
 
 def main(args):
     bert_base_uncased = "bert-base-uncased"
+    # bert_base_uncased = "bert-base-small"
     set_seed(args)
     
     device = get_default_device()
