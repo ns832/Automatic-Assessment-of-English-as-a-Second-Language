@@ -15,8 +15,8 @@ parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--prompts_path', type=str, help='Load path of question training data')
 parser.add_argument('--responses_path', type=str, help='Load path of answer training data')
 parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids')
-parser.add_argument('--batch_size', type=int, default=24, help='Specify the training batch size')
-parser.add_argument('--learning_rate', type=float, default=2e-5, help='Specify the initial learning rate')
+parser.add_argument('--batch_size', type=int, default=12, help='Specify the training batch size')
+parser.add_argument('--learning_rate', type=float, default=5e-5, help='Specify the initial learning rate')
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
 parser.add_argument('--lr_decay', type=float, default=0.85, help='Specify the learning rate decay rate')
 parser.add_argument('--dropout', type=float, default=0.1, help='Specify the dropout rate')
@@ -92,7 +92,7 @@ def encode_data(bert_base_uncased, train_data, device, targets):
         encoding = tokenizer(prompt_and_response, max_length = 512, padding="max_length", truncation=True)
         input_ids.append((encoding['input_ids'])) # number ids for the words in the question
         attention_mask.append((encoding['attention_mask'])) # mask any padding tokens
-    
+
     input_ids = torch.tensor(input_ids)
     attention_mask = torch.tensor(attention_mask)
     
@@ -153,6 +153,7 @@ def train_model(args, optimizer, model, device, train_dataset):
                                                 num_training_steps = total_steps)
     
     model.train()
+    loss_values = []
     
     for epoch in range(args.n_epochs):
         print("")
@@ -160,7 +161,6 @@ def train_model(args, optimizer, model, device, train_dataset):
         print('Training...')
         t0 = time.time()
         total_loss = 0
-        loss_values = []
         model.train()
         model.zero_grad() 
         
@@ -178,7 +178,6 @@ def train_model(args, optimizer, model, device, train_dataset):
             outputs = model(input_ids=b_input_ids, attention_mask=b_att_msks, labels=b_targets)
             loss = outputs.loss
             total_loss += loss.item()
-            loss_values.append(loss)
             print("loss.item is", loss.item())
             
             # Then perform the backwards pass through the nn, updating the weights based on gradients
@@ -188,6 +187,7 @@ def train_model(args, optimizer, model, device, train_dataset):
             scheduler.step()
         
     avg_train_loss = total_loss / len(train_dataloader)
+    loss_values.append(loss)
     
     print("")
     print("  Average training loss: {0:.2f}".format(avg_train_loss))
@@ -198,7 +198,7 @@ def train_model(args, optimizer, model, device, train_dataset):
 
 
 def save_model(args, model):
-    file_path = str(args.save_path) + '/bert_seed_' + str(args.seed) + '.pt'
+    file_path = str(args.save_path) + '/bert_seed_' + datetime.datetime.now() + str(args.seed) + '.pt'
     print(file_path)
     torch.save(model, file_path)
     return
