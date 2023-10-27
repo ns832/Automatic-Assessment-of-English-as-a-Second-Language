@@ -38,34 +38,51 @@ def get_default_device():
 
 def set_seed(args):
     seed_val = args.seed
-    random.seed(seed_val)
-    np.random.seed(seed_val)
-    torch.manual_seed(seed_val)
-    torch.cuda.manual_seed_all(seed_val)
+    random.seed(seed_val), np.random.seed(seed_val)
+    torch.manual_seed(seed_val), torch.cuda.manual_seed_all(seed_val)
     return
 
 
-def load_dataset(args, device):
-    prompt_ids, response, train_data = [], [], []
+def load_dataset(args, device, bert_base_uncased):
+    # First load the tokenizer and initialize empty arrays for your encoded inputs and masks
+    tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
+    encoded_prompts, encoded_responses = [], []
+    prompt_attention_masks, response_attention_masks = [], []
+    
     with open(args.prompt_ids_path) as f0, open(args.responses_path) as f1, open(args.prompts_path) as f2:
         prompt_ids, responses, prompts = f0.readlines(), f1.readlines(), f2.readlines()
+        prompts = [x.strip().lower() for x in prompts]
+        prompt_ids = [x.strip().lower() for x in prompt_ids]
+        responses = [x.strip().lower() for x in responses]
+        # max_prompt_length = max([len(sentence) for sentence in prompts])
+        max_prompt_length = 256
+        # max_resp_length = max([len(sentence) for sentence in responses])
+        max_resp_length = 256
+        print('\nPadding token: "{:}", ID: {:}'.format(tokenizer.pad_token, tokenizer.pad_token_id))
+        print("Dataset Loaded")
         
         # choose to permute the dataset and concatenate it with the original dataset
         val = int(len(prompt_ids))
         prompt_ids = permute_data(prompt_ids, val, device)
         responses += responses # since we doubled the prompt size
-    
+
+        # Encode the prompts/responses and save the attention masks, padding applied to the end
         for (prompt_id, response) in zip(prompt_ids, responses):
-            train_data.append(prompts[int(prompt_id)] + ' [SEP] ' + response)
-            
-    targets = torch.tensor([0] * val + [1] * val) # i.e. first half is on-topic, second half is off-topic
-    print("Dataset Loaded")
-    return train_data, targets
+            encoded_prompt, prompt_attention_mask = encode_data(tokenizer, prompts[int(prompt_id)], max_prompt_length)
+            encoded_response, response_attention_mask = encode_data(tokenizer, response, max_resp_length)
+            encoded_prompts.append(encoded_prompt), prompt_attention_masks.append(prompt_attention_mask)
+            encoded_responses.append(encoded_response), response_attention_masks.append(response_attention_mask)
+    
+    # Targets i.e. first half is on-topic, second half is off-topic
+    targets = torch.tensor([0] * val + [1] * val) 
+    encoded_prompts, encoded_responses = torch.tensor(encoded_prompts), torch.tensor(encoded_responses)
+    prompt_attention_masks, response_attention_masks = torch.tensor(prompt_attention_masks), torch.tensor(response_attention_masks)
+    return encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_masks, targets
 
 
 def permute_data(prompt_ids, val, device): 
     # Dynamic shuffling in order to generate off-topic samples, based on prompt probability dist.
-    unique_prompts_distribution_path = "/scratches/dialfs/alta/ns832/data/train_seen/training/topics_dist.txt" 
+    unique_prompts_distribution_path = "/scratches/dialfs/alta/relevance/ns832/data/train_seen/training/topics_dist.txt" 
     prompt_distribution = np.loadtxt(unique_prompts_distribution_path, dtype=np.int32)
     prompt_distribution = prompt_distribution / np.linalg.norm(prompt_distribution, 1)
     
@@ -81,28 +98,19 @@ def permute_data(prompt_ids, val, device):
     return prompt_ids
 
 
-def encode_data(bert_base_uncased, train_data, device, targets):
-    
-    tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
+def encode_data(tokenizer, inputs, MAX_LEN):
     input_ids, attention_mask = [], []
-    
-    for prompt_and_response in train_data:
-        encoding = tokenizer(prompt_and_response, max_length = 512, padding="max_length", truncation=True)
-        input_ids.append((encoding['input_ids'])) # number ids for the words in the question
-        attention_mask.append((encoding['attention_mask'])) # mask any padding tokens
+    encoding = tokenizer(inputs, padding="max_length", max_length = MAX_LEN, truncation=True)
+    input_ids.append(encoding["input_ids"])
+    attention_mask.append(encoding["attention_mask"])
+    return input_ids, attention_mask
 
-    input_ids = torch.tensor(input_ids)
-    attention_mask = torch.tensor(attention_mask)
-    
-    if device == 'cuda':
-        input_ids.long().to(device)
-        attention_mask.long().to(device)
-        targets.long().to(device)
-        
-    print("Input_ids:", input_ids, "\n Attention_masks:", attention_mask)
-    print(targets.size(), input_ids.size(), attention_mask.size())
-    train_dataset = TensorDataset(input_ids, attention_mask, targets)
-    return train_dataset
+
+def create_dataset(encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_mask, targets):
+    train_data = TensorDataset(encoded_prompts, encoded_responses,prompt_attention_masks, response_attention_mask, targets)
+    train_sampler = RandomSampler(train_data)
+    train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
+    return train_dataloader
 
 
 def configure_model(bert_base_uncased, device):
@@ -126,26 +134,22 @@ def configure_optimiser(model, args):
                     )
     return optimizer
 
-def plot_loss(args, loss_values):
+def plot_loss(args, loss_values, avg_train_loss):
     
     fig = plt.figure(figsize=(8, 6))
-    plt.plot(range(0, args.n_epochs), loss_values, marker='o', linestyle='-', color='b', label='Training Loss')
+    plt.plot(loss_values, marker='o', linestyle='-', color='b', label='Training Loss')
     plt.title('Training Loss vs Epoch')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
+    plt.xlabel('Epochs'), plt.ylabel('Loss')
     plt.legend()
-    plt.grid(True)
-    fig.savefig('/scratches/dialfs/alta/ns832/results/' + str(args.seed) + '_plot.jpg', bbox_inches='tight', dpi=150)
+    plt.grid(True)  
+    fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/bert_model_' + str(avg_train_loss) + '_plot.jpg', bbox_inches='tight', dpi=150)
     plt.show()
 
 
-def train_model(args, optimizer, model, device, train_dataset):
+def train_model(args, optimizer, model, device, train_dataloader):
     
     # specify the sequence of indices/keys used in data loading,
     # want each epoch to have a different order to prevent over fitting
-    train_sampler = RandomSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.batch_size)
-    
     total_steps = len(train_dataloader) * args.n_epochs
     scheduler = get_linear_schedule_with_warmup(optimizer,
                                                 num_warmup_steps = 306,
@@ -167,16 +171,22 @@ def train_model(args, optimizer, model, device, train_dataset):
             if step % 40 == 0 and not step == 0:
                 elapsed = format_time(time.time() - t0)
                 print('  Batch {:>5,}  of  {:>5,}.    Elapsed: {:}.'.format(step, len(train_dataloader), elapsed))
+                loss_values.append(torch.tensor(loss, device = 'cpu'))
+                
             model.zero_grad()
+            # encoded_prompts, encoded_responses, response_attention_mask
+            encoded_prompts_batch = (batch[0].to(device)).squeeze(1)
+            encoded_responses_batch = (batch[1].to(device)).squeeze(1)
+            prompt_attention_masks_batch = (batch[2].to(device)).squeeze(1)
+            responses_attention_mask_batch = (batch[3].to(device)).squeeze(1)
+            targets_batch = batch[4].to(device)
             
-            b_input_ids = batch[0].to(device)
-            b_att_msks = batch[1].to(device)
-            b_targets = batch[2].to(device)
+            # Concatenate prompts and responses together
+            input_batch, input_mask_batch = torch.cat((encoded_prompts_batch, encoded_responses_batch), 1), torch.cat((prompt_attention_masks_batch, responses_attention_mask_batch), 1)  
             
             # First compute the outputs given the current weights, and the current and total loss
-            outputs = model(input_ids=b_input_ids, attention_mask=b_att_msks, labels=b_targets)
+            outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=targets_batch)
             loss = outputs.loss
-            loss_values.append(torch.tensor(loss, device = 'cpu'))
             total_loss += loss.item()
             print("loss.item is", loss.item())
             
@@ -193,30 +203,32 @@ def train_model(args, optimizer, model, device, train_dataset):
     print("  Average training loss: {0:.2f}".format(avg_train_loss))
     print("  Training epoch took: {:}".format(format_time(time.time() - t0)))
     
-    plot_loss(args, loss_values)
-    return
+    plot_loss(args, loss_values, avg_train_loss)
+    return avg_train_loss
 
 
-def save_model(args, model):
-    file_path = str(args.save_path) + '/bert_seed_' + str(datetime.datetime.now()) + str(args.seed) + '.pt'
+def save_model(args, model, avg_train_loss):
+    file_path = str(args.save_path) + '/bert_model_' + str(avg_train_loss) + '.pt'
     print(file_path)
     torch.save(model, file_path)
     return
 
 
 def main(args):
-    bert_base_uncased = "bert-base-uncased"
-    # bert_base_uncased = "bert-base-small"
+    # bert_base_uncased = "bert-base-uncased"
+    bert_base_uncased = "prajjwal1/bert-small"
     set_seed(args)
     
     device = get_default_device()
-    train_data, targets = load_dataset(args, device)
-    train_dataset = encode_data(bert_base_uncased, train_data, device, targets)
+    encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_mask, targets = load_dataset(args, device, bert_base_uncased)
+    print("Dataset Encoded")
+    train_dataloader = create_dataset(encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_mask, targets)
+    
     model = configure_model(bert_base_uncased, device)
     optimizer = configure_optimiser(model, args)
     
-    train_model(args, optimizer, model, device, train_dataset)
-    save_model(args, model)
+    avg_train_loss = train_model(args, optimizer, model, device, train_dataloader)
+    save_model(args, model, avg_train_loss)
     return
 
 
