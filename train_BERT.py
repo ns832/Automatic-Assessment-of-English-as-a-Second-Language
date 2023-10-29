@@ -15,6 +15,7 @@ parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--prompts_path', type=str, help='Load path of question training data')
 parser.add_argument('--responses_path', type=str, help='Load path of answer training data')
 parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids')
+parser.add_argument('--topics_path', type=str, help='Load path of question training data')
 parser.add_argument('--batch_size', type=int, default=12, help='Specify the training batch size')
 parser.add_argument('--learning_rate', type=float, default=1e-5, help='Specify the initial learning rate')
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
@@ -49,65 +50,82 @@ def load_dataset(args, device, bert_base_uncased):
     encoded_prompts, encoded_responses = [], []
     prompt_attention_masks, response_attention_masks = [], []
     
-    with open(args.prompt_ids_path) as f0, open(args.responses_path) as f1, open(args.prompts_path) as f2:
-        prompt_ids, responses, prompts = f0.readlines(), f1.readlines(), f2.readlines()
+    with open(args.prompt_ids_path) as f0, open(args.responses_path) as f1, open(args.prompts_path) as f2,open(args.topics_path) as f3:
+        prompt_ids, responses, prompts, topics = f0.readlines(), f1.readlines(), f2.readlines(), f3.readlines()
         prompts = [x.strip().lower() for x in prompts]
         prompt_ids = [x.strip().lower() for x in prompt_ids]
         responses = [x.strip().lower() for x in responses]
-        # max_prompt_length = max([len(sentence) for sentence in prompts])
-        max_prompt_length = 256
-        # max_resp_length = max([len(sentence) for sentence in responses])
-        max_resp_length = 256
-        print('\nPadding token: "{:}", ID: {:}'.format(tokenizer.pad_token, tokenizer.pad_token_id))
+        topics = [x.strip().lower() for x in topics]
         print("Dataset Loaded")
         
         # choose to permute the dataset and concatenate it with the original dataset
         val = int(len(prompt_ids))
-        prompt_ids = permute_data(prompt_ids, val, device)
+        prompts = permute_data(prompt_ids, val, prompts, topics)
         responses += responses # since we doubled the prompt size
-
+        
+        # max_prompt_length = max([len(sentence) for sentence in prompts]) max_resp_length = max([len(sentence) for sentence in responses])
+        max_prompt_length, max_resp_length = 256, 256
+        
         # Encode the prompts/responses and save the attention masks, padding applied to the end
-        for (prompt_id, response) in zip(prompt_ids, responses):
-            encoded_prompt, prompt_attention_mask = encode_data(tokenizer, prompts[int(prompt_id)], max_prompt_length)
+        for (prompt, response) in zip(prompts, responses):
+            encoded_prompt, prompt_attention_mask = encode_data(tokenizer, prompt, max_prompt_length)
             encoded_response, response_attention_mask = encode_data(tokenizer, response, max_resp_length)
             encoded_prompts.append(encoded_prompt), prompt_attention_masks.append(prompt_attention_mask)
             encoded_responses.append(encoded_response), response_attention_masks.append(response_attention_mask)
     
     # Targets i.e. first half is on-topic, second half is off-topic
-    targets = torch.tensor([0] * val + [1] * val) 
+    targets = torch.tensor([1] * val + [0] * val) 
     encoded_prompts, encoded_responses = torch.tensor(encoded_prompts), torch.tensor(encoded_responses)
     prompt_attention_masks, response_attention_masks = torch.tensor(prompt_attention_masks), torch.tensor(response_attention_masks)
     return encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_masks, targets
 
 
-def permute_data(prompt_ids, val, device): 
+def permute_data(prompt_ids, val, prompts, topics): 
     # Dynamic shuffling in order to generate off-topic samples, based on prompt probability dist.
     unique_prompts_distribution_path = "/scratches/dialfs/alta/relevance/ns832/data/train_seen/training/topics_dist.txt" 
     prompt_distribution = np.loadtxt(unique_prompts_distribution_path, dtype=np.int32)
     prompt_distribution = prompt_distribution / np.linalg.norm(prompt_distribution, 1)
-    
     number_of_questions = len(prompt_distribution)
+        
+    # Cycle through the new batch, and reassign any responses that have been assigned their original prompts
     new_prompt_ids = np.random.choice(number_of_questions, val, p=prompt_distribution)
-    
     for i in range(val):
         while (new_prompt_ids[i] == prompt_ids[i]):
             new_prompt_ids[i] = np.random.choice(number_of_questions, 1, p=prompt_distribution)
     prompt_ids += list(new_prompt_ids)
     
+    # Assign the prompt, the topics.txt are one line out from the actual id due to how python works with indexing
+    new_prompt_list = []
+    for prompt_id in prompt_ids:
+        new_prompt_list.append(topics[int(prompt_id)])
+        
     print("Data permuted")
-    return prompt_ids
+    return new_prompt_list
 
 
 def encode_data(tokenizer, inputs, MAX_LEN):
     input_ids, attention_mask = [], []
-    encoding = tokenizer(inputs, padding="max_length", max_length = MAX_LEN, truncation=True)
+    encoding = tokenizer(inputs, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
+    if len(encoding)>256:
+        encoding = encoding[:255]+[encoding[-1]]
     input_ids.append(encoding["input_ids"])
     attention_mask.append(encoding["attention_mask"])
     return input_ids, attention_mask
 
 
-def create_dataset(encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_mask, targets):
-    train_data = TensorDataset(encoded_prompts, encoded_responses,prompt_attention_masks, response_attention_mask, targets)
+def create_dataset(encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_masks, targets):
+    encoded_prompts = encoded_prompts.squeeze(1)
+    encoded_responses = encoded_responses.squeeze(1)
+    prompt_attention_masks = prompt_attention_masks.squeeze(1)
+    response_attention_masks = response_attention_masks.squeeze(1)
+    
+    prompt_and_response = torch.cat((encoded_prompts, encoded_responses),1)
+    prompt_and_response_masks = torch.cat((prompt_attention_masks, response_attention_masks),1)
+    prompt_and_response = prompt_and_response.squeeze(1)
+    prompt_and_response_masks = prompt_and_response_masks.squeeze(1)
+    print(prompt_and_response.size(), prompt_and_response_masks.size(), targets.size())
+    
+    train_data = TensorDataset(prompt_and_response, prompt_and_response_masks, targets)
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
     return train_dataloader
@@ -174,18 +192,15 @@ def train_model(args, optimizer, model, device, train_dataloader):
                 loss_values.append(torch.tensor(loss, device = 'cpu'))
                 
             model.zero_grad()
-            # encoded_prompts, encoded_responses, response_attention_mask
-            encoded_prompts_batch = (batch[0].to(device)).squeeze(1)
-            encoded_responses_batch = (batch[1].to(device)).squeeze(1)
-            prompt_attention_masks_batch = (batch[2].to(device)).squeeze(1)
-            responses_attention_mask_batch = (batch[3].to(device)).squeeze(1)
-            targets_batch = batch[4].to(device)
-            
-            # Concatenate prompts and responses together
-            input_batch, input_mask_batch = torch.cat((encoded_prompts_batch, encoded_responses_batch), 1), torch.cat((prompt_attention_masks_batch, responses_attention_mask_batch), 1)  
+            prompt_response = (batch[0].to(device)).squeeze(1)
+            prompt_response_mask = (batch[1].to(device)).squeeze(1)
+            targets_batch = batch[2].to(device) 
+            # print(prompt_response.size())
+            # print(prompt_response_mask.size())
+            # print(targets_batch.size())
             
             # First compute the outputs given the current weights, and the current and total loss
-            outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=targets_batch)
+            outputs = model(input_ids=prompt_response, attention_mask=prompt_response_mask, labels=targets_batch)
             loss = outputs.loss
             total_loss += loss.item()
             print("loss.item is", loss.item())
