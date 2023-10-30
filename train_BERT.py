@@ -44,15 +44,14 @@ def set_seed(args):
     return
 
 
-def load_dataset(args, device, bert_base_uncased):
+def load_dataset(args, bert_base_uncased):
     # First load the tokenizer and initialize empty arrays for your encoded inputs and masks
     tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
     encoded_prompts, encoded_responses = [], []
     prompt_attention_masks, response_attention_masks = [], []
     
-    with open(args.prompt_ids_path) as f0, open(args.responses_path) as f1, open(args.prompts_path) as f2,open(args.topics_path) as f3:
-        prompt_ids, responses, prompts, topics = f0.readlines(), f1.readlines(), f2.readlines(), f3.readlines()
-        prompts = [x.strip().lower() for x in prompts]
+    with open(args.prompt_ids_path) as f0, open(args.responses_path) as f1, open(args.topics_path) as f2:
+        prompt_ids, responses, topics = f0.readlines(), f1.readlines(), f2.readlines()
         prompt_ids = [x.strip().lower() for x in prompt_ids]
         responses = [x.strip().lower() for x in responses]
         topics = [x.strip().lower() for x in topics]
@@ -60,7 +59,7 @@ def load_dataset(args, device, bert_base_uncased):
         
         # choose to permute the dataset and concatenate it with the original dataset
         val = int(len(prompt_ids))
-        prompts = permute_data(prompt_ids, val, prompts, topics)
+        prompts = permute_data(prompt_ids, val, topics)
         responses += responses # since we doubled the prompt size
         
         # max_prompt_length = max([len(sentence) for sentence in prompts]) max_resp_length = max([len(sentence) for sentence in responses])
@@ -77,10 +76,11 @@ def load_dataset(args, device, bert_base_uncased):
     targets = torch.tensor([1] * val + [0] * val) 
     encoded_prompts, encoded_responses = torch.tensor(encoded_prompts), torch.tensor(encoded_responses)
     prompt_attention_masks, response_attention_masks = torch.tensor(prompt_attention_masks), torch.tensor(response_attention_masks)
+    print(encoded_prompts.size(), encoded_responses.size())
     return encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_masks, targets
 
 
-def permute_data(prompt_ids, val, prompts, topics): 
+def permute_data(prompt_ids, val, topics): 
     # Dynamic shuffling in order to generate off-topic samples, based on prompt probability dist.
     unique_prompts_distribution_path = "/scratches/dialfs/alta/relevance/ns832/data/train_seen/training/topics_dist.txt" 
     prompt_distribution = np.loadtxt(unique_prompts_distribution_path, dtype=np.int32)
@@ -99,17 +99,20 @@ def permute_data(prompt_ids, val, prompts, topics):
     for prompt_id in prompt_ids:
         new_prompt_list.append(topics[int(prompt_id)])
         
-    print("Data permuted")
+    print("Data Permuted")
     return new_prompt_list
 
 
 def encode_data(tokenizer, inputs, MAX_LEN):
     input_ids, attention_mask = [], []
     encoding = tokenizer(inputs, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
-    if len(encoding)>256:
-        encoding = encoding[:255]+[encoding[-1]]
-    input_ids.append(encoding["input_ids"])
-    attention_mask.append(encoding["attention_mask"])
+    # input_ids.append(encoding["input_ids"])
+    if len(encoding["input_ids"]) > 256:
+        input_ids.append(encoding["input_ids"][:256])
+        attention_mask.append(encoding["attention_mask"][:256])
+    else:
+        input_ids.append(encoding["input_ids"])
+        attention_mask.append(encoding["attention_mask"])
     return input_ids, attention_mask
 
 
@@ -235,7 +238,7 @@ def main(args):
     set_seed(args)
     
     device = get_default_device()
-    encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_mask, targets = load_dataset(args, device, bert_base_uncased)
+    encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_mask, targets = load_dataset(args, bert_base_uncased)
     print("Dataset Encoded")
     train_dataloader = create_dataset(encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_mask, targets)
     

@@ -90,7 +90,7 @@ def eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_
     y_pred_all = []
     print("Started evaluation")
     
-    #enumerate(train_dataloader)??
+    #enumerate(train_dataloader)
     for prompt_id, att_mask_prompt, resp_id, att_mask_resp, target in eval_dataloader:
         pr_resp, pr_resp_msk = torch.cat((prompt_id, resp_id), 1), torch.cat((att_mask_prompt, att_mask_resp), 1)  
         pr_resp, pr_resp_msk = send_to_device(device, (pr_resp)), send_to_device(device, pr_resp_msk)        
@@ -111,11 +111,12 @@ def eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_
     return targets, y_pred_all
 
         
-def calculate_metrics(targets, y_pred_all, model_name):
+def calculate_metrics(targets, y_pred_all):
     targets = 1.-targets
     y_pred = 1.-y_pred_all
     targets, y_pred = torch.tensor(targets, device = 'cpu'), torch.tensor(y_pred, device = 'cpu')
     precision, recall, _ = precision_recall_curve(targets, y_pred)
+    
     print("Precision:", precision)
     print("Recall:", recall)
     
@@ -127,21 +128,26 @@ def calculate_metrics(targets, y_pred_all, model_name):
     ax.set_title('Precision-Recall Curve')
     ax.set_ylabel('Precision')
     ax.set_xlabel('Recall')
-
-    #display plot
-    fig.show()
-    fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_' + model_name +  '_plot.jpg', bbox_inches='tight', dpi=150)
+    for i in range(len(precision)):
+        print(i)
+        if precision[i] == 0 or recall[i] == 0:
+            precision[i] += 0.1
+            recall[i] += 0.1
+            
     f_score = np.amax( (1.+0.5**2) * ( (precision * recall) / (0.5**2 * precision + recall) ) )
     print("F0.5 score is:", f_score)
 
+    #display plot
+    fig.show()
+    fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
+
     
 def main(args):
-    model_name = (args.model_path).replace("/scratches/dialfs/alta/relevance/ns832/results/bert_model_", "").replace(".pt", "")
     device = get_default_device()
     model, tokenizer = load_trained_model(args, device)
     prompt_ids, resp_ids, att_mask_prompts, att_mask_resps, targets = load_dataset(tokenizer, args)
     targets, y_pred_all = eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_mask_resps, targets)
-    calculate_metrics(targets, y_pred_all, model_name)
+    calculate_metrics(targets, y_pred_all)
 
 
 if __name__ == '__main__':
