@@ -2,16 +2,11 @@ import argparse
 import os
 
 import torch
-from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
-import random
-import time
 import datetime
-import re
 from sklearn.metrics import precision_recall_curve
-from sklearn.metrics import PrecisionRecallDisplay
-from keras_preprocessing.sequence import pad_sequences
-from transformers import BertTokenizer, BertForSequenceClassification
+from transformers import BertTokenizer
 import matplotlib.pyplot as plt
 
 
@@ -129,7 +124,6 @@ def calculate_metrics(targets, y_pred_all):
     ax.set_ylabel('Precision')
     ax.set_xlabel('Recall')
     for i in range(len(precision)):
-        print(i)
         if precision[i] == 0 or recall[i] == 0:
             precision[i] += 0.1
             recall[i] += 0.1
@@ -148,7 +142,7 @@ def main(args):
     prompt_ids, resp_ids, att_mask_prompts, att_mask_resps, targets = load_dataset(tokenizer, args)
     targets, y_pred_all = eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_mask_resps, targets)
     calculate_metrics(targets, y_pred_all)
-
+    return y_pred_all
 
 if __name__ == '__main__':
     args = parser.parse_args()
