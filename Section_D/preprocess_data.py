@@ -242,6 +242,7 @@ def encode_dataset(text_data, image_data, bert_base_uncased):
     
     # Encode the prompts/responses and save the attention masks, padding applied to the end
     image_list = []
+    index_to_remove = []
     for data in text_data:
         # Find the corresponding image so that later they can be concatenated together
         image = find_corresponding_image_id(data.prompt, image_data)[1]
@@ -250,8 +251,10 @@ def encode_dataset(text_data, image_data, bert_base_uncased):
             text, mask = encode_data(tokenizer, data, max_prompt_length)
             data.add_encodings(text, mask)
         else:
-            text_data.remove(data)
-
+            index_to_remove.append(text_data.index(data))
+            # text_data.remove(data)
+    for index in index_to_remove:
+        text_data.pop(index)
     return text_data, image_list
 
 
@@ -259,13 +262,13 @@ def encode_dataset(text_data, image_data, bert_base_uncased):
 def remove_mismatching_prompts(image_list, text_data):
     """
         Takes in an image list and data list and returns an object that combines text, image and targets.
-        It checks to ensure that both image and text is completer
+        It checks to ensure that both image and text is complete
     """    
     data_train = []
     for image, text in zip(image_list, text_data):
-        if image.pixel_values != None:
+        if image.pixel_values != None and text.text != None:
             data_train.append(complete_data(image, text))
-
+            
     return data_train
 
 

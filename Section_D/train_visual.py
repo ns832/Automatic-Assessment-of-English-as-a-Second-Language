@@ -1,14 +1,8 @@
 import argparse
 import torch
-from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import TensorDataset, DataLoader, RandomSampler
 import numpy as np
-from transformers import AutoImageProcessor, ViTForImageClassification, ViTImageProcessor
-from torchvision import transforms
-from torchvision.datasets import ImageFolder
-import os
-from PIL import Image
-from transformers import BertTokenizer, BertForSequenceClassification
-import re
+import matplotlib as plt
 import datetime
 import time
 import preprocess_data, load_models
@@ -53,42 +47,48 @@ def format_time(elapsed):
         
 
 def create_dataset(data_train):
-    encoded_texts = [x.text for x in data_train]
-    for text in encoded_texts:
-        if text is None:
-            print(text)
-    raise
-    mask = [x.mask for x in data_train]
-    target = [x.target for x in data_train]
-    image = [x.image for x in data_train]
-    image_mask = [x.image_mask for x in data_train]
-    print(encoded_texts)
+    """
+        Takes in data_train that is a class which include the prompts, responses, images etc.
+        It extracts the different elements and turns them into torch tensors, concatenating the 
+        encoded text with the encoded image, and concatenating their attention masks
+        
+        Then takes these along with the targets to create a dataset and then dataloader
+    """
+    # Extract the different elements and convert them to numpy array to make the conversion to torch tensors easier
+    encoded_texts = np.array([x.text for x in data_train])
+    mask = np.array([x.mask for x in data_train])
+    targets = np.array([x.target for x in data_train])
+    # image = np.array([x.image for x in data_train])
+    # image_mask = np.array([x.image_mask for x in data_train])
     
-    encoded_texts = torch.tensor(encoded_texts)
-    mask = torch.tensor(mask)
-    target = torch.tensor(target)
-    image = torch.tensor(image)
-    image_mask = torch.tensor(image_mask)
+    # Turn into torch tensor and send to cuda, squeezing the dimensions down to 2 dims for all
+    encoded_texts = torch.tensor(encoded_texts).to(device).squeeze()
+    mask = torch.tensor(mask).to(device).squeeze()
+    targets = torch.tensor(targets).to(device)
+    # image = torch.tensor(image).to(device)
+    # image_mask = torch.tensor(image_mask).to(device)
+
+    # Concatenate the visual and textual elements together
+    # input = torch.cat((encoded_texts, image),1)
+    # input_mask = torch.cat((mask, image_mask),1)
+    # input = input.squeeze(1)
+    # input_mask = input_mask.squeeze(1)
     
-    print(image_mask.shape)
-    raise
-    input = torch.cat((encoded_texts, image),1)
-    input_mask = torch.cat((text_attention_masks, VT_attention_mask),1)
-    input = input.squeeze(1)
-    input_mask = input_mask.squeeze(1)
-    print(input.size(), input_mask.size(), targets.size())
-    
-    train_data = TensorDataset(input, input_mask, targets)
+    # Create and return dataloader
+    # train_data = TensorDataset(input, input_mask, targets)
+    train_data = TensorDataset(encoded_texts, mask, targets)
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
     return train_dataloader
 
 
 
-def train_model(args, optimizer, model, device, train_dataloader):
-    
-    # specify the sequence of indices/keys used in data loading,
-    # want each epoch to have a different order to prevent over fitting
+def train_BERT_model(args, optimizer, model, device, train_dataloader):
+    """
+        Runs the training using the train_dataloader created in create_datasets().
+        Splits the data into batches specified by the args specified by user, runs the training, and returns the last outputs
+    """
+    # Specify the sequence of indices/keys used in data loading, want each epoch to have a different order to prevent over fitting
     total_steps = len(train_dataloader) * args.n_epochs
     scheduler = get_linear_schedule_with_warmup(optimizer,
                                                 num_warmup_steps = 306,
@@ -113,12 +113,12 @@ def train_model(args, optimizer, model, device, train_dataloader):
                 loss_values.append(torch.tensor(loss, device = 'cpu'))
                 
             model.zero_grad()
-            prompt_response = (batch[0].to(device)).squeeze(1)
-            prompt_response_mask = (batch[1].to(device)).squeeze(1)
-            targets_batch = batch[2].to(device) 
+            input_batch = (batch[0].to(device)).squeeze(1)
+            input_mask_batch = (batch[1].to(device)).squeeze(1)
+            target_batch = batch[2].to(device) 
             
             # First compute the outputs given the current weights, and the current and total loss
-            outputs = model(input_ids=prompt_response, attention_mask=prompt_response_mask, labels=targets_batch)
+            outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=target_batch)
             loss = outputs.loss
             total_loss += loss.item()
             print("loss.item is", loss.item())
@@ -130,14 +130,34 @@ def train_model(args, optimizer, model, device, train_dataloader):
             scheduler.step()
         
     avg_train_loss = total_loss / len(train_dataloader)
+    print("")
+    print("  Average training loss: {0:.2f}".format(avg_train_loss))
+    print("  Training epoch took: {:}".format(format_time(time.time() - t0)))
     
-    
-    # print("")
-    # print("  Average training loss: {0:.2f}".format(avg_train_loss))
-    # print("  Training epoch took: {:}".format(format_time(time.time() - t0)))
-    
-    # plot_loss(args, loss_values, avg_train_loss)
-    return avg_train_loss
+    return outputs.logits
+
+
+def plot_loss(loss_values, avg_train_loss):
+    fig = plt.figure(figsize=(8, 6))
+    plt.plot(loss_values, marker='o', linestyle='-', color='b', label='Training Loss')
+    plt.title('Training Loss vs Epoch')
+    plt.xlabel('Epochs'), plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)  
+    fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/bert_model_' + str(avg_train_loss) + '_plot.jpg', bbox_inches='tight', dpi=150)
+    plt.show()
+
+
+
+def save_model(args, model, avg_train_loss):
+    """
+        Saves the model so it can be accessed for evaluationg
+    """
+    file_path = str(args.save_path) + '/bert_model_' + str(avg_train_loss) + '.pt'
+    print(file_path)
+    # torch.save(model, file_path)
+    return
+
 
 
 def main():    
@@ -155,9 +175,9 @@ def main():
     text_data = preprocess_data.permute_data(text_data, topics, args)
     
     # Preprocess visual data
-    image_data = preprocess_data.load_images(image_data, args)    
+    image_data = preprocess_data.load_images(image_data, args)   
     text_data, image_list = preprocess_data.encode_dataset(text_data, image_data, bert_base_uncased)
-
+            
     image_list = preprocess_data.encode_images(image_list, image_processor)
     data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
     
@@ -171,13 +191,15 @@ def main():
         
     # Set attention mask set to zero for the visual elements and add mask and image encoding to data_train
     VT_attention_mask = np.zeros_like(VT_outputs.cpu())
-    VT_attention_mask = torch.tensor(VT_attention_mask)
+    VT_outputs = VT_outputs.tolist()
+    
     for output, mask, data in zip(VT_outputs, VT_attention_mask, data_train):
         data.add_image_encodings(output, mask)
 
     train_dataloader = create_dataset(data_train)
-    # avg_train_loss = train_model(args, optimizer, model, device, train_dataloader)
-    # train_BERT.save_model(args, model, avg_train_loss)
+    BERT_outputs = train_BERT_model(args, optimizer, model, device, train_dataloader)
+    print(BERT_outputs.shape, VT_outputs.shape)
+    # save_model(args, model, avg_train_loss)
 
 if __name__ == '__main__':
     main() 
