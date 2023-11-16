@@ -19,8 +19,8 @@ parser.add_argument('--topics_path', type=str, help='Load path of question train
 parser.add_argument('--topic_dist_path', type=str, help='Load path of question training data')
 parser.add_argument('--image_ids_path', type=str, help='Load path of image ids')
 parser.add_argument('--image_prompts_path', type=str, help='Load path of prompts corresponding to image ids')
-parser.add_argument('--model_path', type=str, help='Load path to trained model')
 parser.add_argument('--predictions_save_path', type=str, help="Where to save predicted values")
+parser.add_argument('--save_path', type=str, help="Where to save predicted values")
 parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
 parser.add_argument('--learning_rate', type=float, default=1e-5, help='Specify the initial learning rate')
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
@@ -134,18 +134,23 @@ def train_BERT_model(args, optimizer, model, device, train_dataloader):
     print("  Average training loss: {0:.2f}".format(avg_train_loss))
     print("  Training epoch took: {:}".format(format_time(time.time() - t0)))
     
-    return outputs.logits
+    return outputs.hidden_states[-1], avg_train_loss
 
 
-def plot_loss(loss_values, avg_train_loss):
-    fig = plt.figure(figsize=(8, 6))
-    plt.plot(loss_values, marker='o', linestyle='-', color='b', label='Training Loss')
-    plt.title('Training Loss vs Epoch')
-    plt.xlabel('Epochs'), plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True)  
-    fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/bert_model_' + str(avg_train_loss) + '_plot.jpg', bbox_inches='tight', dpi=150)
-    plt.show()
+
+def apply_classification_head(BERT_hidden_state, VT_hidden_state):
+    """
+        Takes in the hidden states from the two systems, concatenates them and applies a linear classification head.
+        The function returns logits
+    """
+    BERT_hidden_state = torch.tensor(BERT_hidden_state)
+    VT_hidden_state = torch.tensor(VT_hidden_state)
+    
+    concatenated_states = torch.cat((BERT_hidden_state, VT_hidden_state))
+    classification_head = torch.nn.Linear(concatenated_states.size(1), 2)
+    logits = classification_head(concatenated_states)
+    
+    return logits
 
 
 
@@ -155,7 +160,7 @@ def save_model(args, model, avg_train_loss):
     """
     file_path = str(args.save_path) + '/bert_model_' + str(avg_train_loss) + '.pt'
     print(file_path)
-    # torch.save(model, file_path)
+    torch.save(model, file_path)
     return
 
 
@@ -184,22 +189,17 @@ def main():
     pixel_values = [x.pixel_values for x in data_train]
     pixel_values = torch.tensor(pixel_values).to(device)
     
-    # Obtain VT outputs (not used in training, only evaluation)
+    # Obtain hidden states for VT and BERT
     with torch.no_grad():
         VT_outputs = visual_model(pixel_values) 
-        VT_outputs = VT_outputs.logits    
-        
-    # Set attention mask set to zero for the visual elements and add mask and image encoding to data_train
-    VT_attention_mask = np.zeros_like(VT_outputs.cpu())
-    VT_outputs = VT_outputs.tolist()
-    
-    for output, mask, data in zip(VT_outputs, VT_attention_mask, data_train):
-        data.add_image_encodings(output, mask)
+        VT_hidden_state = VT_outputs.hidden_states[-1]
 
     train_dataloader = create_dataset(data_train)
-    BERT_outputs = train_BERT_model(args, optimizer, model, device, train_dataloader)
-    print(BERT_outputs.shape, VT_outputs.shape)
-    # save_model(args, model, avg_train_loss)
+    BERT_hidden_state,avg_train_loss = train_BERT_model(args, optimizer, model, device, train_dataloader)
+    print(len(BERT_hidden_state), len(VT_hidden_state))
+    
+    
+    save_model(args, model, avg_train_loss)
 
 if __name__ == '__main__':
     main() 

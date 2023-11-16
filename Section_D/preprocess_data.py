@@ -30,14 +30,11 @@ class image():
         self.prompt = image_prompt
         self.id = image_id
         self.image = None
-        self.inputs = None
-        self.pixel_values = None
+        self.pixels = None
     def add_image(self, preprocessed_image):
         self.image = preprocessed_image
-    def add_pixel_values(self, pixel_value):
-        self.pixel_values = pixel_value
-    def add_input_values(self, input_list):
-        self.inputs = input_list
+    def add_encodings(self, pixel_values):
+        self.pixels = pixel_values
         
 
 class complete_data():
@@ -45,7 +42,7 @@ class complete_data():
         self.text = prompt_response.text
         self.mask = prompt_response.mask
         self.target = prompt_response.target
-        self.pixel_values = image.pixel_values
+        self.pixels = image.pixels
     def add_image_encodings(self, VT_outputs, VT_attention_mask):
         self.image = VT_outputs
         self.image_mask = VT_attention_mask
@@ -152,12 +149,18 @@ def load_dataset(args):
         prompt_ids, topics = f4.readlines(), f5.readlines()
         
         # Stripping the arrays to match the formating 
+        # prompt_ids = [x.strip().lower() for x in prompt_ids]
+        # prompts = [x.strip().lower() for x in prompts]
+        # responses = [x.strip().lower() for x in responses]
+        # topics = [x.strip().lower() for x in topics]
+        # image_ids = [x.strip().lower() for x in image_ids]
+        # image_prompts = [x.strip().lower() for x in image_prompts]
         prompt_ids = [x.strip().lower() for x in prompt_ids[:100]]
         prompts = [x.strip().lower() for x in prompts[:100]]
         responses = [x.strip().lower() for x in responses[:100]]
         topics = [x.strip().lower() for x in topics[:100]]
-        image_ids = [x.strip().lower() for x in image_ids]
-        image_prompts = [x.strip().lower() for x in image_prompts]
+        image_ids = [x.strip().lower() for x in image_ids[:100]]
+        image_prompts = [x.strip().lower() for x in image_prompts[:100]]
         
         # Create two datasets, using the custom classes defined
         print("Dataset Loaded")
@@ -215,18 +218,17 @@ def permute_data(text_data, topics, args):
 
 
 
-def encode_images(image_data, image_processor):
+def encode_images(image_data, feature_extractor):
     """
         Takes in an array of images and processes them using a pretrained image processor.
         Sets the corresponding class attributes to the new values
     """
-    
     # Iterate through lists, processing the image and returning a pytorch tensor
     for image in image_data:
         if image.image != None:
-            inputs = image_processor(image.image, return_tensors="pt", do_rescale=True).to(device)
-            image.add_pixel_values(inputs.pixel_values.squeeze().tolist())
-            image.add_input_values(inputs)
+            inputs = feature_extractor(image.image, return_tensors="pt", do_rescale=True).to(device)
+            image.add_encodings((inputs.pixel_values).cpu())
+            
     return image_data
 
 
@@ -238,7 +240,6 @@ def encode_dataset(text_data, image_data, bert_base_uncased):
     """
     tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
     max_prompt_length = 256
-    
     
     # Encode the prompts/responses and save the attention masks, padding applied to the end
     image_list = []
@@ -252,24 +253,10 @@ def encode_dataset(text_data, image_data, bert_base_uncased):
             data.add_encodings(text, mask)
         else:
             index_to_remove.append(text_data.index(data))
-            # text_data.remove(data)
-    for index in index_to_remove:
+            
+    for index in list(reversed(index_to_remove)):
         text_data.pop(index)
     return text_data, image_list
-
-
-
-def remove_mismatching_prompts(image_list, text_data):
-    """
-        Takes in an image list and data list and returns an object that combines text, image and targets.
-        It checks to ensure that both image and text is complete
-    """    
-    data_train = []
-    for image, text in zip(image_list, text_data):
-        if image.pixel_values != None and text.text != None:
-            data_train.append(complete_data(image, text))
-            
-    return data_train
 
 
 
@@ -285,3 +272,18 @@ def encode_data(tokenizer, data, MAX_LEN):
         input_ids.append(encoding["input_ids"])
         attention_mask.append(encoding["attention_mask"])
     return input_ids, attention_mask
+
+
+
+def remove_mismatching_prompts(image_list, text_data):
+    """
+        Takes in an image list and data list and returns an object that combines text, image and targets.
+        It checks to ensure that both image and text is complete
+    """    
+    data_train = []
+    for image, text in zip(image_list, text_data):
+        if image.pixels != None and text.text != None:
+            data_train.append(complete_data(image, text))
+            
+    return data_train
+

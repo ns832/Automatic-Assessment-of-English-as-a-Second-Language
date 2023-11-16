@@ -2,7 +2,7 @@ import argparse
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 import numpy as np
-from transformers import AutoImageProcessor, ViTForImageClassification, ViTImageProcessor
+from transformers import AutoImageProcessor, ViTForImageClassification, ViTImageProcessor, ViTFeatureExtractor
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 import os
@@ -16,10 +16,14 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 def load_vision_transformer_model():
-    image_processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
-    model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
+    # image_processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
+    feature_extractor = ViTFeatureExtractor.from_pretrained("google/vit-base-patch16-224")
+    model = ViTForImageClassification.from_pretrained(
+        "google/vit-base-patch16-224",
+        output_hidden_states = True
+        )
     model.to(device)
-    return model, image_processor
+    return model, feature_extractor
 
 
 def load_BERT_model(bert_base_uncased, device):
@@ -27,10 +31,15 @@ def load_BERT_model(bert_base_uncased, device):
         bert_base_uncased, # Use the 12-layer BERT model, with an uncased vocab.
         num_labels = 2, # Only two classes, on-topic and off-topic  
         output_attentions = False, # Whether the model returns attentions weights.
-        output_hidden_states = False, # Whether the model returns all hidden-states.
+        output_hidden_states = True, # Whether the model returns all hidden-states.
         )
     if device == 'cuda':
         model.to(device)
+    return model
+
+def load_trained_BERT_model(args):
+    model = torch.load(args.model_path)
+    model.eval().to(device)
     return model
 
 
