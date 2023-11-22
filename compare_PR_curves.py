@@ -1,10 +1,7 @@
 import eval_BERT
 import argparse
 import torch
-import sklearn
 import numpy as np
-from torch.utils.data import TensorDataset, DataLoader
-import torch.nn.functional as F
 from sklearn.metrics import precision_recall_curve
 from numpy import inf
 
@@ -47,12 +44,29 @@ def calculate_metrics(targets_1, y_pred_all_1, targets_2, y_pred_all_2):
     precision_1, recall_1, thresholds_1 = precision_recall_curve(targets_1, y_preds_1)
     precision_2, recall_2, thresholds_2 = precision_recall_curve(targets_2, y_preds_2)
     
-    r = (precision_1[0] + precision_2[0]) / 2
+    for i in range(len(precision_1)):
+        if precision_1[i] == 0 or recall_1[i] == 0:
+            precision_1[i] += 0.01
+            recall_1[i] += 0.01
+    
+    for i in range(len(precision_2)):
+        if precision_2[i] == 0 or recall_2[i] == 0:
+            precision_2[i] += 0.01
+            recall_2[i] += 0.01
+    
+    f_score_1_orig = (np.amax((1.+0.5**2) * ((precision_1 * recall_1) / (0.5**2 * precision_1 + recall_1))))
+    f_score_2_orig = (np.amax((1.+0.5**2) * ((precision_2 * recall_2) / (0.5**2 * precision_2 + recall_2))))
+
+    # r = (precision_1[0] + precision_2[0]) / 2
+    r = 0.5
     
     targets_1, y_preds_1 = torch.tensor(targets_1, device = 'cpu'), torch.tensor(y_preds_1, device = 'cpu')
     targets_2, y_preds_2 = torch.tensor(targets_2, device = 'cpu'), torch.tensor(y_preds_2, device = 'cpu')
+    
     p_1_list, p_2_list = precision_1**(-1) - 1, precision_2**(-1) - 1
     n_1_list, n_2_list = recall_1**(-1) - 1, recall_2**(-1) - 1
+    
+    
     # Add in the last threshold that the p-r curve doesn't output doesn't include
     thresholds_1 = np.concatenate([thresholds_1, [y_preds_1.max()]]) 
     thresholds_2 = np.concatenate([thresholds_2, [y_preds_2.max()]]) 
@@ -72,14 +86,14 @@ def calculate_metrics(targets_1, y_pred_all_1, targets_2, y_pred_all_2):
             elif pred == 0 and target == 1:
                 fn += 1
         # Avoid divide by zero error
-        if tn == 0 or fp == 0:
-            tp += 1 
-            tn += 1
-            fp += 1 
+        if tn + fp == 0:
+            fp += 1
             fn += 1 
-        h = (tp + fp) / (tn + fp)
+        # h is calculated from the ground truth positive and negative classes
+        h = (tp + fn) / (tn + fp)
         k_1 = (h * (r**(-1) - 1))
-        f_scores_1.append(2 * (1.+0.5**2) / (2 * (1.+0.5**2) + (0.5**2)*k_1 * p_1 + n_1))
+        # f_scores_1.append( (1.+0.5**2) * tp / ((1.+0.5**2) * tp + (0.5**2)*k_1 * fn + fp))
+        f_scores_1.append((1.+0.5**2) / ((1.+0.5**2) + (0.5**2)* n_1 + p_1 * k_1))
         
     for threshold, p_2, n_2 in zip(thresholds_2, p_2_list, n_2_list):
         tp, fp, tn, fn = 0, 0, 0, 0
@@ -94,19 +108,18 @@ def calculate_metrics(targets_1, y_pred_all_1, targets_2, y_pred_all_2):
             elif pred == 0 and target == 1:
                 fn += 1
         # Avoid divide by zero error
-        if tn == 0 or fp == 0:
-            tp += 1 
-            tn += 1
-            fp += 1 
+        if tn + fp == 0:
+            fp += 1
             fn += 1 
-        h = (tp + fp) / (tn + fp)
+        # h is calculated from the ground truth positive and negative classes
+        h = (tp + fn) / (tn + fp)
         k_2 = (h * (r**(-1) - 1))
-        f_scores_2.append(2 * (1.+0.5**2) / (2 * (1.+0.5**2) + (0.5**2)*k_2 * p_2 + n_2))
+        f_scores_2.append((1.+0.5**2) / ((1.+0.5**2) + (0.5**2)* n_2 + p_2 * k_2))
+        # f_scores_2.append( (1.+0.5**2) * tp / ((1.+0.5**2) * tp + (0.5**2)*k_2 * fn + fp))
+        
         
     f_score_1 = max(f_scores_1)
     f_score_2 = max(f_scores_2)
-    f_score_1_orig = np.amax(2 * (1.+0.5**2) / (2 * (1.+0.5**2) + (0.5**2)*p_1_list + n_1_list))
-    f_score_2_orig = np.amax(2 * (1.+0.5**2) / (2 * (1.+0.5**2) + (0.5**2)*p_2_list + n_2_list))
     
     print("Normalised F0.5 scores are:", f_score_1, f_score_2)
     print("Original F0.5 scores are:", f_score_1_orig, f_score_2_orig)
