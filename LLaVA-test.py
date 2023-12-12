@@ -15,7 +15,7 @@ from PIL import Image
 import requests
 from PIL import Image
 from io import BytesIO
-from transformers import TextStreamer
+from transformers import TextStreamer, AutoTokenizer
 import Section_D.preprocess_data as preprocess_data, Section_D.load_models as load_models
 
 def get_default_device():
@@ -58,27 +58,17 @@ def create_prompts(text_data):
     return LLaMA_prompt_list
 
 
-def get_probabilities(input_ids, output_ids, tokenizer):
+def get_probabilities(logits, on_token, off_token):
     """
-        Takes in the output of the model and converts it into a probability for on/off topic
+        Takes in the output of the model and converts it into a probability for on topic
     """
+    on_logits = logits[0, on_token[1]]
+    off_logits = logits[0, off_token[1]]
+    print(np.argmax(logits[0,:]))
+    score = np.exp(on_logits) / (np.exp(on_logits) + np.exp(off_logits))
+    print("Logits:", on_logits, off_logits, "Score:", score)
     
-    # Score is a tuple consisting of two tensors. Each tensor has n number of rows, where n is the amount of sequences returned
-    for seq, score_1, score_2 in zip(output_ids.sequences, output_ids.scores[0], output_ids.scores[1]):
-        seq = tokenizer.decode(seq[input_ids.shape[1]:]).strip()
-                
-        probability = torch.nn.functional.softmax(score_1)
-        values = torch.topk(probability, k=2).values
-        score = values[0] / (values[0] + values[1])
-        # probability = torch.nn.functional.softmax(score_2)
-        # print(torch.topk(probability, k=2))
-        print(seq)
-    
-    # On is 1 and off is 0
-    if "off" in seq.lower():
-        score = 1 - score
-    
-    return score.cpu()
+    return score
 
 
 def calculate_metrics(targets, y_pred_all):
@@ -113,33 +103,33 @@ def calculate_metrics(targets, y_pred_all):
 
 
 def main(args):
-    bert_base_uncased = "prajjwal1/bert-small"
-
+    
     # Preprocess textual data
     text_data, image_data, topics = preprocess_data.load_dataset(args)
     text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
+    text_data = preprocess_data.permute_data(text_data[:1000], topics, args)
     
-    text_data = preprocess_data.permute_data(text_data[:100], topics, args)
+    # Get model, tokenizer and image processor
+    model_name = get_model_name_from_path(args.model_path)
+    tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit, device=args.device)
+    on_token = tokenizer("On").input_ids
+    off_token = tokenizer("Off").input_ids
     
     # Preprocess visual data
     image_data = preprocess_data.load_images(image_data, args)   
-    text_data, image_list = preprocess_data.encode_dataset(text_data, image_data, bert_base_uncased)
+    text_data, image_list = preprocess_data.encode_dataset(tokenizer, text_data, image_data)
     
     image_paths = [args.images_path + str(x.id.upper() + ".png") for x in image_list]
     LLaMA_prompt_list = create_prompts(text_data)
     assert (len(LLaMA_prompt_list) == len(image_paths) == len(text_data))
     print(len(LLaMA_prompt_list))
     
+    
     # Model
     disable_torch_init()
 
-    # Get model, tokenizer and image processor
-    model_name = get_model_name_from_path(args.model_path)
-    tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit, device=args.device)
-    
     conv_mode = "llava_v1"
     conv = conv_templates[conv_mode].copy()
-    
     
     prob_list = []
     for inp, image_path in zip(LLaMA_prompt_list, image_paths):
@@ -166,34 +156,36 @@ def main(args):
         stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
         streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
         
+        
         with torch.inference_mode():
-            output_ids = model.generate( 
+            output = model.generate( 
                 input_ids,
-                images=image_tensor, # optional?, try removing to get text only classification
-                num_return_sequences = 1, #
+                images=image_tensor, 
                 return_dict_in_generate=True,
-                do_sample=True if args.temperature > 0 else False,
-                temperature=1,
-                max_new_tokens=args.max_new_tokens, # Add max length?
+                max_new_tokens=1, 
                 streamer=streamer,
-                use_cache=False, # 
-                output_hidden_states = True,
-                output_scores=True, #
-                no_repeat_ngram_size = 1, # 
+                use_cache=False, 
+                output_scores=True, 
+                no_repeat_ngram_size = 1, 
                 stopping_criteria=[stopping_criteria])
             
-        probability = get_probabilities(input_ids, output_ids, tokenizer)
-        prob_list.append(probability)
+        logits = np.array(output.scores[0].cpu())
+        on_prob = get_probabilities(logits, on_token, off_token)    
+        prob_list.append(on_prob)    
 
         # If you don't reset conv then it will throw up issues as this template is designed for one image being fed in and then only text conversation after
         conv = conv_templates[conv_mode].copy()
     
-    if args.real == False:
-        targets = [x.target for x in text_data]
-        targets = np.array(targets)
-    else:
-        targets = np.loadtxt(args.labels_path, dtype=int)
-        targets = torch.tensor(targets)
+    # if args.real == False:
+    #     targets = [x.target for x in text_data]
+    #     targets = np.array(targets)
+    # else:
+    #     targets = np.loadtxt(args.labels_path, dtype=int)
+    #     targets = torch.tensor(targets)
+    # prob_list = np.array(prob_list)
+    
+    targets = [x.target for x in text_data]
+    targets = np.array(targets)
     prob_list = np.array(prob_list)
     for prob, target in zip(prob_list, targets):
         print(prob, target)
