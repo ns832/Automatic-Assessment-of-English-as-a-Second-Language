@@ -6,6 +6,9 @@ import matplotlib as plt
 import datetime
 from sklearn.metrics import precision_recall_curve
 import preprocess_data, load_models
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers import BertTokenizer 
 
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
@@ -32,17 +35,6 @@ parser.add_argument('--n_epochs', type=int, default=1, help='Specify the number 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
 args = parser.parse_args()
-
-
-
-def format_time(elapsed):
-    """
-        Used for displaying time when measuring time lengths
-    """
-    
-    elapsed_rounded = int(round((elapsed)))
-    return str(datetime.timedelta(seconds=elapsed_rounded))
-        
         
 
 def create_dataset(data_train):
@@ -79,34 +71,57 @@ def get_hidden_state(model, visual_model, device, eval_dataloader):
     print("Started evaluation")
     
     concatenated_outputs = []
-    for step, batch in enumerate(eval_dataloader):
+    for batch in eval_dataloader:
         
         input_batch = (batch[0].to(device)).squeeze(1)
         input_mask_batch = (batch[1].to(device)).squeeze(1)
         target_batch = batch[2].to(device) 
         pixels = batch[3].to(device)
-        print(input_batch.shape, input_mask_batch.shape, target_batch.shape, pixels.shape)
-        
+        # print(input_batch.shape, input_mask_batch.shape, target_batch.shape, pixels.shape)
 
         with torch.no_grad():
             BERT_outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=target_batch)
             VT_outputs = visual_model(pixels) 
-            
+        
         BERT_hidden_state = BERT_outputs.hidden_states[-1]
         VT_hidden_state = (VT_outputs.hidden_states[-1])[:, :, :BERT_hidden_state.shape[2]]
         concatenated_outputs.append(torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1))
-        
+        print("function:get_hidden_state", BERT_hidden_state.shape, VT_hidden_state.shape, torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1).shape)
+            
     return concatenated_outputs
 
 
-
+## Want this in the training!
 def classification_head(hidden_state):
+    """
+        Takes in the concatenated hidden states from the two systems, and applies a linear classification head.
+        The function returns an array logits
+    """
     # y_pred_all is equivalent to the logits    
     y_pred_all = []    
-    classification_head = torch.nn.Linear(hidden_state[0].size(1), 2)
-    for state in hidden_state:
-        y_pred_all += classification_head(state)
-    
+    test_head = nn.Sequential(
+        nn.Linear(hidden_state[0].shape[2], 1),
+        nn.ReLU()
+    )
+    flattened = test_head(hidden_state[0][0]).squeeze()
+    test_head_2 = nn.Sequential(
+        nn.Linear(hidden_state[0].shape[1], 1)
+    )
+    print(test_head_2(flattened))
+    raise
+    classification_head = nn.Sequential(
+        nn.Linear(hidden_state[0].shape[2], 1),  # Intermediate dimension
+        nn.ReLU(),
+        nn.Linear(453, 2)
+    )
+    # Returns two logits, one for each class
+    for state in hidden_state[0]:
+        print(state.shape)
+        y_pred_all.append(classification_head(state).detach().cpu().numpy())
+        y = F.softmax(classification_head(state), dim=0)
+        print(len(y))
+        raise
+    print("Y_pred_all:", y_pred_all)
     return y_pred_all
 
         
@@ -137,9 +152,7 @@ def calculate_metrics(targets, y_pred_all):
 
     #display plot
     fig.show()
-    fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
-
-
+    # fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
 
 
 def main():    
@@ -158,7 +171,8 @@ def main():
     
     # Preprocess visual data
     image_data = preprocess_data.load_images(image_data, args)   
-    text_data, image_list = preprocess_data.encode_dataset(text_data, image_data, bert_base_uncased)
+    tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
+    text_data, image_list = preprocess_data.encode_dataset(tokenizer, text_data, image_data)
             
     image_list = preprocess_data.encode_images(image_list, feature_extractor)
     data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
@@ -167,8 +181,8 @@ def main():
     train_dataloader = create_dataset(data_train)
     hidden_state = get_hidden_state(model, visual_model, device, train_dataloader)
     
-    y_pred_all = classification_head(hidden_state)
-    targets = [x.target for x in data_train]
+    y_pred_all = np.array(classification_head(hidden_state))
+    targets = np.array([x.target for x in data_train])
     calculate_metrics(targets, y_pred_all)
 
 if __name__ == '__main__':

@@ -16,14 +16,14 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 def load_vision_transformer_model():
-    # image_processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
-    feature_extractor = ViTFeatureExtractor.from_pretrained("google/vit-base-patch16-224")
+    image_processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
+    # feature_extractor = ViTFeatureExtractor.from_pretrained("google/vit-base-patch16-224")
     model = ViTForImageClassification.from_pretrained(
         "google/vit-base-patch16-224",
         output_hidden_states = True
         )
     model.to(device)
-    return model, feature_extractor
+    return model, image_processor
 
 
 def load_BERT_model(bert_base_uncased, device):

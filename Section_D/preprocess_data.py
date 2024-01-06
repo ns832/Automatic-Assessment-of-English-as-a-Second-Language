@@ -90,7 +90,7 @@ def find_corresponding_image_id(prompt, image_data):
         # If there are multiple hypens, it's harder. Attempt to split the expression by the hyphen and search
         elif re.split('-', im_prompt)[0] in prompt: 
             return True, image
-        
+    # print(prompt)
     return False, 0
 
 
@@ -233,12 +233,11 @@ def encode_images(image_data, feature_extractor):
 
 
 
-def encode_dataset(text_data, image_data, bert_base_uncased):
+def encode_dataset(tokenizer, text_data, image_data):
     """
         Encodes the entire text data by calling the function encode_data().
         Also create targets
     """
-    tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
     max_prompt_length = 256
     
     # Encode the prompts/responses and save the attention masks, padding applied to the end
@@ -281,8 +280,14 @@ def remove_mismatching_prompts(image_list, text_data):
         It checks to ensure that both image and text is complete
     """    
     data_train = []
+    temp_im_list, temp_prompt_list, temp_response_list = [], [], []
+    temp_targets_list = []
     for image, text in zip(image_list, text_data):
         if image.pixels != None and text.text != None:
+            temp_targets_list.append(str(text.target))
+            temp_im_list.append(image.id)
+            temp_prompt_list.append(text.prompt)
+            temp_response_list.append(text.response)
             data_train.append(complete_data(image, text))
             
     return data_train

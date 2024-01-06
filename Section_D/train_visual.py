@@ -6,8 +6,9 @@ import matplotlib as plt
 import datetime
 import time
 import preprocess_data, load_models
-from transformers import get_linear_schedule_with_warmup
-
+from transformers import get_linear_schedule_with_warmup, BertTokenizer
+import torch.nn as nn
+import torch.nn.functional as F
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--images_path', type=str, help='Load path of image training data')
@@ -34,6 +35,17 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
 args = parser.parse_args()
 
+class ClassificationHead(nn.Module):
+    def __init__(self, head, head_2):
+        super(ClassificationHead, self).__init__()
+        self.head = head
+        self.head_2 = head_2
+    def forward(self, x):
+        x = self.head(x).squeeze()
+        x = self.head_2(x).squeeze()
+        # return F.softmax(x, dim=0)
+        return x
+
 
 
 def format_time(elapsed):
@@ -58,29 +70,52 @@ def create_dataset(data_train):
     encoded_texts = np.array([x.text for x in data_train])
     mask = np.array([x.mask for x in data_train])
     targets = np.array([x.target for x in data_train])
-    # image = np.array([x.image for x in data_train])
-    # image_mask = np.array([x.image_mask for x in data_train])
     
     # Turn into torch tensor and send to cuda, squeezing the dimensions down to 2 dims for all
     encoded_texts = torch.tensor(encoded_texts).to(device).squeeze()
     mask = torch.tensor(mask).to(device).squeeze()
     targets = torch.tensor(targets).to(device)
-    # image = torch.tensor(image).to(device)
-    # image_mask = torch.tensor(image_mask).to(device)
-
-    # Concatenate the visual and textual elements together
-    # input = torch.cat((encoded_texts, image),1)
-    # input_mask = torch.cat((mask, image_mask),1)
-    # input = input.squeeze(1)
-    # input_mask = input_mask.squeeze(1)
-    
-    # Create and return dataloader
-    # train_data = TensorDataset(input, input_mask, targets)
     train_data = TensorDataset(encoded_texts, mask, targets)
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
-    return train_dataloader
+    
+    return train_dataloader, targets
 
+
+
+def train_classification_head(args, optimizer, hidden_states, targets):
+    """
+        Runs the training for the classifier.
+    """
+    # Specify the sequence of indices/keys used in data loading, want each epoch to have a different order to prevent over fitting
+    head = nn.Sequential(
+        nn.Linear(hidden_states.shape[2], 1),
+        nn.ReLU()
+        )
+    head_2 = nn.Sequential(
+        nn.Linear(hidden_states.shape[1], 1),
+        nn.ReLU()
+        )
+    
+    targets = targets.float()
+    model = ClassificationHead(head, head_2).to(device)
+    criterion = nn.BCEWithLogitsLoss()
+    
+    for epoch in range(1000):
+        print("Training Classification Head")
+        outputs = model(hidden_states.to(device))
+        
+        loss = criterion(outputs, targets)
+        print("Loss: ", loss.item())
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+    
+    file_path = str(args.save_path) + '/trial_classification_head.pt'
+    torch.save(model, file_path)
+    
+    return 
 
 
 def train_BERT_model(args, optimizer, model, device, train_dataloader):
@@ -96,6 +131,7 @@ def train_BERT_model(args, optimizer, model, device, train_dataloader):
     
     model.train()
     loss_values = []
+    hidden_states = torch.empty((0, 256, 512), dtype=torch.float32)
     
     for epoch in range(args.n_epochs):
         print("")
@@ -128,30 +164,29 @@ def train_BERT_model(args, optimizer, model, device, train_dataloader):
             loss.backward()
             optimizer.step()
             scheduler.step()
+            hidden_states = torch.cat((hidden_states, outputs.hidden_states[-1].detach().cpu()), dim=0)
         
     avg_train_loss = total_loss / len(train_dataloader)
     print("")
     print("  Average training loss: {0:.2f}".format(avg_train_loss))
     print("  Training epoch took: {:}".format(format_time(time.time() - t0)))
     
-    return outputs.hidden_states[-1], avg_train_loss
+    return hidden_states, avg_train_loss
 
 
-
-def apply_classification_head(BERT_hidden_state, VT_hidden_state):
-    """
-        Takes in the hidden states from the two systems, concatenates them and applies a linear classification head.
-        The function returns logits
-    """
-    BERT_hidden_state = torch.tensor(BERT_hidden_state)
-    VT_hidden_state = torch.tensor(VT_hidden_state)
+# def classification_head(hidden_states):
+#     """
+#         Takes in the concatenated hidden states from the two systems, and applies a linear classification head.
+#     """
     
-    concatenated_states = torch.cat((BERT_hidden_state, VT_hidden_state))
-    classification_head = torch.nn.Linear(concatenated_states.size(1), 2)
-    logits = classification_head(concatenated_states)
-    
-    return logits
-
+#     head = nn.Sequential(
+#         nn.Linear(hidden_states.shape[2], 1),
+#         nn.ReLU()
+#     )
+#     y_pred_all = []    
+#     for state in hidden_states[0]:
+#         y_pred_all.append(head(state).detach().cpu().numpy())
+#     return y_pred_all
 
 
 def save_model(args, model, avg_train_loss):
@@ -180,25 +215,31 @@ def main():
     text_data = preprocess_data.permute_data(text_data, topics, args)
     
     # Preprocess visual data
-    image_data = preprocess_data.load_images(image_data, args)   
-    text_data, image_list = preprocess_data.encode_dataset(text_data, image_data, bert_base_uncased)
+    image_data = preprocess_data.load_images(image_data, args)  
+    tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True) 
+    text_data, image_list = preprocess_data.encode_dataset(tokenizer, text_data, image_data)
             
     image_list = preprocess_data.encode_images(image_list, image_processor)
     data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
     
-    pixel_values = [x.pixel_values for x in data_train]
-    pixel_values = torch.tensor(pixel_values).to(device)
+    pixels = np.array([x.pixels for x in data_train])
+    pixels = torch.tensor(pixels).to(device).squeeze()
     
     # Obtain hidden states for VT and BERT
     with torch.no_grad():
-        VT_outputs = visual_model(pixel_values) 
+        VT_outputs = visual_model(pixels) 
         VT_hidden_state = VT_outputs.hidden_states[-1]
 
-    train_dataloader = create_dataset(data_train)
-    BERT_hidden_state,avg_train_loss = train_BERT_model(args, optimizer, model, device, train_dataloader)
-    print(len(BERT_hidden_state), len(VT_hidden_state))
+    # Create dataloader with the text data
+    train_dataloader, targets = create_dataset(data_train)
+    BERT_hidden_state, avg_train_loss = train_BERT_model(args, optimizer, model, device, train_dataloader)    
     
+    # Concatenate vision transformer and BERT hidden states
+    VT_hidden_state = VT_hidden_state[:, :, :BERT_hidden_state.shape[2]]
+    concatenated_outputs = torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1)
     
+    # Train the classification head and save both models
+    train_classification_head(args, optimizer, concatenated_outputs, targets)
     save_model(args, model, avg_train_loss)
 
 if __name__ == '__main__':
