@@ -2,7 +2,6 @@ import argparse
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler
 import numpy as np
-import matplotlib as plt
 import datetime
 import time
 import preprocess_data, load_models
@@ -29,6 +28,7 @@ parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify th
 parser.add_argument('--lr_decay', type=float, default=0.85, help='Specify the learning rate decay rate')
 parser.add_argument('--dropout', type=float, default=0.1, help='Specify the dropout rate')
 parser.add_argument('--n_epochs', type=int, default=1, help='Specify the number of epochs to train for')
+parser.add_argument('--labels_path', type=str, help='Load path to labels')
 
 
 # Global Variables
@@ -112,46 +112,6 @@ def train_classification_head(args, optimizer, hidden_states, targets):
     return model
 
 
-# def train_classification_head(args, optimizer, hidden_states, targets):
-#     """
-#         Runs the training for the classifier.
-#     """
-#     head = nn.Sequential(
-#         nn.Linear(hidden_states.shape[2], 1),
-#         nn.ReLU()
-#         )
-#     head_2 = nn.Sequential(
-#         nn.Linear(hidden_states.shape[1], 1),
-#         nn.ReLU()
-#         )
-    
-#     targets = targets.float()
-#     model = ClassificationHead(head, head_2).to(device)
-#     criterion = nn.BCEWithLogitsLoss()
-    
-#     # model = ClassificationHead(head, head_2).to(device)
-#     # criterion = torch.nn.MSELoss()
-#     optimizer = optim.SGD(model.parameters(), lr=0.1)
-
-#     print("Training Classification Head")
-#     for epoch in range(1000):
-#         model.zero_grad()
-#         optimizer.zero_grad()
-#         outputs = model(hidden_states.to(device))
-#         loss = criterion(outputs, targets)
-#         print("Epoch {}: Loss: {}".format(epoch, loss.item()))
-#         loss.backward()
-#         optimizer.step()
-    
-#     # print(model.head)
-#     # print(model.head[0].weight)
-#     # print(model.head_2[0].weight)
-#     file_path = str(args.save_path) + '/trial_classification_head.pt'
-#     torch.save(model, file_path)
-#     print(file_path)
-#     return model
-
-
 def train_BERT_model(args, optimizer, model, device, train_dataloader):
     """
         Runs the training using the train_dataloader created in create_datasets().
@@ -231,7 +191,22 @@ def main():
     # Preprocess textual data
     text_data, image_data, topics = preprocess_data.load_dataset(args)
     text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
-    text_data = preprocess_data.permute_data(text_data, topics, args)
+    
+    
+    print("Shuffling real data to create synthetic")
+    targets = np.loadtxt(args.labels_path, dtype=int)
+    text_data = [x for (x, y) in zip(text_data, targets) if y == 1]
+    targets = [1] * len(text_data) + [0] * len(text_data)
+    text_data = preprocess_data.permute_data(text_data[:500], topics, args)
+    assert (len(targets) == len(text_data))
+    temp = list(zip(text_data, targets))
+    np.random.shuffle(temp)
+    text_data, targets = zip(*temp)
+    targets = torch.tensor(targets)
+    print(len(text_data))
+    
+    
+    # text_data = preprocess_data.permute_data(text_data, topics, args)
     
     # Preprocess visual data
     image_data = preprocess_data.load_images(image_data, args)  
@@ -251,6 +226,7 @@ def main():
 
     # Create dataloader with the text data
     train_dataloader, targets = create_dataset(data_train)
+
     BERT_hidden_state, avg_train_loss = train_BERT_model(args, optimizer, model, device, train_dataloader)    
     
     # Concatenate vision transformer and BERT hidden states
@@ -258,8 +234,6 @@ def main():
     # VT_hidden_state = torch.stack([x.cpu() / np.linalg.norm(x.cpu()) for x in VT_hidden_state])
     # BERT_hidden_state = torch.stack([x.cpu() / np.linalg.norm(x.cpu()) for x in BERT_hidden_state])
     concatenated_outputs = torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1)
-    print(type(concatenated_outputs))
-    raise
     
     # Train the classification head and save both models
     train_classification_head(args, optimizer, concatenated_outputs, targets)

@@ -2,7 +2,7 @@ import argparse
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler
 import numpy as np
-import matplotlib as plt
+import matplotlib.pyplot as plt
 import datetime
 from sklearn.metrics import precision_recall_curve
 import preprocess_data, load_models
@@ -45,8 +45,8 @@ class ClassificationHead(nn.Module):
         self.head = head
         self.head_2 = head_2
     def forward(self, x):
-        x = self.head(x.to(device)).squeeze()
-        x = self.head_2(x.to(device)).squeeze()
+        x = self.head(x).squeeze()
+        x = self.head_2(x).squeeze()
         return F.softmax(x, dim=0)
     
     
@@ -97,11 +97,9 @@ def get_hidden_state(model, visual_model, device, eval_dataloader):
         
         BERT_hidden_state = torch.tensor(BERT_outputs.hidden_states[-1])
         VT_hidden_state = torch.tensor((VT_outputs.hidden_states[-1])[:, :, :BERT_hidden_state.shape[2]])
-        print(torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1).shape)
         concatenated_outputs.append(torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1))
-        # print("function:get_hidden_state", BERT_hidden_state.shape, VT_hidden_state.shape, torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1).shape)
 
-    concatenated_outputs = torch.stack(concatenated_outputs).squeeze()
+    concatenated_outputs = torch.cat(concatenated_outputs, dim=0).squeeze()
     return concatenated_outputs
 
         
@@ -133,7 +131,24 @@ def calculate_metrics(targets, y_pred_all):
     #display plot
     fig.show()
     fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_visual_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
+    print('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_visual_' + str(f_score) +  '_plot.jpg')
 
+def load_classification_head(hidden_state):
+    # Load Classification Head
+    head = nn.Sequential(
+        nn.Linear(hidden_state.shape[2], 1),
+        nn.ReLU()
+    )
+    head_2 = nn.Sequential(
+        nn.Linear(hidden_state.shape[1], 1),
+        nn.ReLU()
+    )
+    classification_head = ClassificationHead(head, head_2)
+    classification_head.load_state_dict(torch.load(args.classification_model_path))
+    # classification_head.to(device)
+    classification_head.eval()
+    # classification_head = torch.load(args.classification_model_path)
+    return classification_head
 
 def main():    
     bert_base_uncased = "prajjwal1/bert-small"
@@ -159,24 +174,11 @@ def main():
     # Obtain hidden states for VT and BERT
     train_dataloader = create_dataset(data_train)
     hidden_state = get_hidden_state(model, visual_model, device, train_dataloader)
+    hidden_state.cpu()
     
-    
-    # Load Classification Head
-    head = nn.Sequential(
-        nn.Linear(hidden_state.shape[2], 1),
-        nn.ReLU()
-    )
-    head_2 = nn.Sequential(
-        nn.Linear(hidden_state.shape[1], 1),
-        nn.ReLU()
-    )
-    classification_head = ClassificationHead(head, head_2)
-    classification_head.load_state_dict(torch.load(args.classification_model_path))
-    classification_head.to(device)
-    classification_head.eval()
-    # classification_head = torch.load(args.classification_model_path)
-    
-    y_pred_all = np.array(classification_head(hidden_state))
+    classification_head = load_classification_head(hidden_state)
+    results = classification_head(hidden_state)
+    y_pred_all = np.array(results.detach())
     targets = np.array([x.target for x in data_train])
     calculate_metrics(targets, y_pred_all)
 

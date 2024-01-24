@@ -148,17 +148,16 @@ def load_dataset(args, images = True):
         # Stripping the arrays to match the formating 
         responses, prompts = f0.readlines(), f1.readlines()
         prompt_ids, topics = f4.readlines(), f5.readlines()
-        prompt_ids = [x.strip().lower() for x in prompt_ids[:10]]
-        prompts = [x.strip().lower() for x in prompts[:10]]
-        responses = [x.strip().lower() for x in responses[:10]]
-        topics = [x.strip().lower() for x in topics[:10]]
+        prompt_ids = [x.strip().lower() for x in prompt_ids[:10000]]
+        prompts = [x.strip().lower() for x in prompts[:10000]]
+        responses = [x.strip().lower() for x in responses[:10000]]
+        topics = [x.strip().lower() for x in topics[:10000]]
         # prompt_ids = [x.strip().lower() for x in prompt_ids]
         # prompts = [x.strip().lower() for x in prompts]
         # responses = [x.strip().lower() for x in responses]
         # topics = [x.strip().lower() for x in topics]
         
         # Create two datasets, using the custom classes defined
-        print("Dataset Loaded")
         text_data, image_data = [], []
         
         for prompt, prompt_id, response in zip(prompts, prompt_ids, responses):
@@ -172,7 +171,8 @@ def load_dataset(args, images = True):
                             
             for image_id, image_prompt in zip(image_ids, image_prompts):
                 image_data.append(image(image_id, image_prompt))
-        
+                
+        print("Dataset Loaded: ", len(text_data))
     return text_data, image_data, topics
 
 
