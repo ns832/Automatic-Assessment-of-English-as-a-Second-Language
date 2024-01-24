@@ -21,6 +21,7 @@ parser.add_argument('--topics_path', type=str, help='Load path of question train
 parser.add_argument('--topic_dist_path', type=str, help='Load path of question training data')
 parser.add_argument('--image_ids_path', type=str, help='Load path of image ids')
 parser.add_argument('--image_prompts_path', type=str, help='Load path of prompts corresponding to image ids')
+parser.add_argument('--classification_model_path', type=str, help='Load path to trained classification head')
 parser.add_argument('--model_path', type=str, help='Load path to trained model')
 parser.add_argument('--predictions_save_path', type=str, help="Where to save predicted values")
 parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
@@ -31,12 +32,24 @@ parser.add_argument('--dropout', type=float, default=0.1, help='Specify the drop
 parser.add_argument('--n_epochs', type=int, default=1, help='Specify the number of epochs to train for')
 
 
+
 # Global Variables
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
 args = parser.parse_args()
         
 
+class ClassificationHead(nn.Module):
+    def __init__(self, head, head_2):
+        super(ClassificationHead, self).__init__()
+        self.head = head
+        self.head_2 = head_2
+    def forward(self, x):
+        x = self.head(x.to(device)).squeeze()
+        x = self.head_2(x.to(device)).squeeze()
+        return F.softmax(x, dim=0)
+    
+    
 def create_dataset(data_train):
     """
         Takes in data_train that is a class which include the prompts, responses, images etc.
@@ -77,52 +90,19 @@ def get_hidden_state(model, visual_model, device, eval_dataloader):
         input_mask_batch = (batch[1].to(device)).squeeze(1)
         target_batch = batch[2].to(device) 
         pixels = batch[3].to(device)
-        # print(input_batch.shape, input_mask_batch.shape, target_batch.shape, pixels.shape)
 
         with torch.no_grad():
             BERT_outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=target_batch)
             VT_outputs = visual_model(pixels) 
         
-        BERT_hidden_state = BERT_outputs.hidden_states[-1]
-        VT_hidden_state = (VT_outputs.hidden_states[-1])[:, :, :BERT_hidden_state.shape[2]]
+        BERT_hidden_state = torch.tensor(BERT_outputs.hidden_states[-1])
+        VT_hidden_state = torch.tensor((VT_outputs.hidden_states[-1])[:, :, :BERT_hidden_state.shape[2]])
+        print(torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1).shape)
         concatenated_outputs.append(torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1))
-        print("function:get_hidden_state", BERT_hidden_state.shape, VT_hidden_state.shape, torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1).shape)
-            
+        # print("function:get_hidden_state", BERT_hidden_state.shape, VT_hidden_state.shape, torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1).shape)
+
+    concatenated_outputs = torch.stack(concatenated_outputs).squeeze()
     return concatenated_outputs
-
-
-## Want this in the training!
-def classification_head(hidden_state):
-    """
-        Takes in the concatenated hidden states from the two systems, and applies a linear classification head.
-        The function returns an array logits
-    """
-    # y_pred_all is equivalent to the logits    
-    y_pred_all = []    
-    test_head = nn.Sequential(
-        nn.Linear(hidden_state[0].shape[2], 1),
-        nn.ReLU()
-    )
-    flattened = test_head(hidden_state[0][0]).squeeze()
-    test_head_2 = nn.Sequential(
-        nn.Linear(hidden_state[0].shape[1], 1)
-    )
-    print(test_head_2(flattened))
-    raise
-    classification_head = nn.Sequential(
-        nn.Linear(hidden_state[0].shape[2], 1),  # Intermediate dimension
-        nn.ReLU(),
-        nn.Linear(453, 2)
-    )
-    # Returns two logits, one for each class
-    for state in hidden_state[0]:
-        print(state.shape)
-        y_pred_all.append(classification_head(state).detach().cpu().numpy())
-        y = F.softmax(classification_head(state), dim=0)
-        print(len(y))
-        raise
-    print("Y_pred_all:", y_pred_all)
-    return y_pred_all
 
         
 def calculate_metrics(targets, y_pred_all):
@@ -152,7 +132,7 @@ def calculate_metrics(targets, y_pred_all):
 
     #display plot
     fig.show()
-    # fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
+    fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_visual_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
 
 
 def main():    
@@ -162,7 +142,6 @@ def main():
     # Load Models and Optimisers
     visual_model, feature_extractor = load_models.load_vision_transformer_model()
     model = load_models.load_trained_BERT_model(args)
-    optimizer = load_models.load_optimiser(model, args)
     
     # Preprocess textual data
     text_data, image_data, topics = preprocess_data.load_dataset(args)
@@ -180,6 +159,22 @@ def main():
     # Obtain hidden states for VT and BERT
     train_dataloader = create_dataset(data_train)
     hidden_state = get_hidden_state(model, visual_model, device, train_dataloader)
+    
+    
+    # Load Classification Head
+    head = nn.Sequential(
+        nn.Linear(hidden_state.shape[2], 1),
+        nn.ReLU()
+    )
+    head_2 = nn.Sequential(
+        nn.Linear(hidden_state.shape[1], 1),
+        nn.ReLU()
+    )
+    classification_head = ClassificationHead(head, head_2)
+    classification_head.load_state_dict(torch.load(args.classification_model_path))
+    classification_head.to(device)
+    classification_head.eval()
+    # classification_head = torch.load(args.classification_model_path)
     
     y_pred_all = np.array(classification_head(hidden_state))
     targets = np.array([x.target for x in data_train])

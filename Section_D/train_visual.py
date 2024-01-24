@@ -9,6 +9,7 @@ import preprocess_data, load_models
 from transformers import get_linear_schedule_with_warmup, BertTokenizer
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--images_path', type=str, help='Load path of image training data')
@@ -43,9 +44,7 @@ class ClassificationHead(nn.Module):
     def forward(self, x):
         x = self.head(x).squeeze()
         x = self.head_2(x).squeeze()
-        # return F.softmax(x, dim=0)
-        return x
-
+        return F.softmax(x, dim=0)
 
 
 def format_time(elapsed):
@@ -82,40 +81,75 @@ def create_dataset(data_train):
     return train_dataloader, targets
 
 
-
 def train_classification_head(args, optimizer, hidden_states, targets):
-    """
-        Runs the training for the classifier.
-    """
-    # Specify the sequence of indices/keys used in data loading, want each epoch to have a different order to prevent over fitting
     head = nn.Sequential(
         nn.Linear(hidden_states.shape[2], 1),
         nn.ReLU()
-        )
+    )
     head_2 = nn.Sequential(
         nn.Linear(hidden_states.shape[1], 1),
         nn.ReLU()
-        )
-    
+    )
+
     targets = targets.float()
     model = ClassificationHead(head, head_2).to(device)
     criterion = nn.BCEWithLogitsLoss()
-    
+    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate)  # Use the learning rate from args
+
+    print("Training Classification Head")
     for epoch in range(1000):
-        print("Training Classification Head")
-        outputs = model(hidden_states.to(device))
-        
-        loss = criterion(outputs, targets)
-        print("Loss: ", loss.item())
+        model.train()  # Ensure the model is in training mode
         optimizer.zero_grad()
+        outputs = model(hidden_states.to(device))
+        loss = criterion(outputs, targets)
+        print("Epoch {}: Loss: {}".format(epoch, loss.item()))
         loss.backward()
         optimizer.step()
-        
-    
+
     file_path = str(args.save_path) + '/trial_classification_head.pt'
-    torch.save(model, file_path)
+    torch.save(model.state_dict(), file_path)  # Save only the model state_dict
+    print(file_path)
+    return model
+
+
+# def train_classification_head(args, optimizer, hidden_states, targets):
+#     """
+#         Runs the training for the classifier.
+#     """
+#     head = nn.Sequential(
+#         nn.Linear(hidden_states.shape[2], 1),
+#         nn.ReLU()
+#         )
+#     head_2 = nn.Sequential(
+#         nn.Linear(hidden_states.shape[1], 1),
+#         nn.ReLU()
+#         )
     
-    return 
+#     targets = targets.float()
+#     model = ClassificationHead(head, head_2).to(device)
+#     criterion = nn.BCEWithLogitsLoss()
+    
+#     # model = ClassificationHead(head, head_2).to(device)
+#     # criterion = torch.nn.MSELoss()
+#     optimizer = optim.SGD(model.parameters(), lr=0.1)
+
+#     print("Training Classification Head")
+#     for epoch in range(1000):
+#         model.zero_grad()
+#         optimizer.zero_grad()
+#         outputs = model(hidden_states.to(device))
+#         loss = criterion(outputs, targets)
+#         print("Epoch {}: Loss: {}".format(epoch, loss.item()))
+#         loss.backward()
+#         optimizer.step()
+    
+#     # print(model.head)
+#     # print(model.head[0].weight)
+#     # print(model.head_2[0].weight)
+#     file_path = str(args.save_path) + '/trial_classification_head.pt'
+#     torch.save(model, file_path)
+#     print(file_path)
+#     return model
 
 
 def train_BERT_model(args, optimizer, model, device, train_dataloader):
@@ -157,7 +191,7 @@ def train_BERT_model(args, optimizer, model, device, train_dataloader):
             outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=target_batch)
             loss = outputs.loss
             total_loss += loss.item()
-            print("loss.item is", loss.item())
+            # print("loss.item is", loss.item())
             
             # Then perform the backwards pass through the nn, updating the weights based on gradients
             optimizer.zero_grad()
@@ -172,21 +206,6 @@ def train_BERT_model(args, optimizer, model, device, train_dataloader):
     print("  Training epoch took: {:}".format(format_time(time.time() - t0)))
     
     return hidden_states, avg_train_loss
-
-
-# def classification_head(hidden_states):
-#     """
-#         Takes in the concatenated hidden states from the two systems, and applies a linear classification head.
-#     """
-    
-#     head = nn.Sequential(
-#         nn.Linear(hidden_states.shape[2], 1),
-#         nn.ReLU()
-#     )
-#     y_pred_all = []    
-#     for state in hidden_states[0]:
-#         y_pred_all.append(head(state).detach().cpu().numpy())
-#     return y_pred_all
 
 
 def save_model(args, model, avg_train_loss):
@@ -235,8 +254,12 @@ def main():
     BERT_hidden_state, avg_train_loss = train_BERT_model(args, optimizer, model, device, train_dataloader)    
     
     # Concatenate vision transformer and BERT hidden states
-    VT_hidden_state = VT_hidden_state[:, :, :BERT_hidden_state.shape[2]]
+    VT_hidden_state = VT_hidden_state[:, :, :BERT_hidden_state.shape[2]] 
+    # VT_hidden_state = torch.stack([x.cpu() / np.linalg.norm(x.cpu()) for x in VT_hidden_state])
+    # BERT_hidden_state = torch.stack([x.cpu() / np.linalg.norm(x.cpu()) for x in BERT_hidden_state])
     concatenated_outputs = torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1)
+    print(type(concatenated_outputs))
+    raise
     
     # Train the classification head and save both models
     train_classification_head(args, optimizer, concatenated_outputs, targets)

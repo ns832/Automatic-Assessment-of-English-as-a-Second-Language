@@ -1,14 +1,6 @@
-import argparse
 import torch
-from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
-import numpy as np
-from transformers import AutoImageProcessor, ViTForImageClassification, ViTImageProcessor, ViTFeatureExtractor
-from torchvision import transforms
-from torchvision.datasets import ImageFolder
-import os
-from PIL import Image
-from transformers import BertTokenizer, BertForSequenceClassification
-import re
+from transformers import ViTForImageClassification, ViTImageProcessor
+from transformers import BertForSequenceClassification
 from transformers import AdamW
 
 

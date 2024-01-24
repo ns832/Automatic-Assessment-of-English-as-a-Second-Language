@@ -131,7 +131,7 @@ def load_images(image_data, args):
 
 
 
-def load_dataset(args):
+def load_dataset(args, images = True):
     """
         Takes in the different file paths and extracts the data from them.
         There are two separate data types and locations; images (with prompts and ids) and 
@@ -143,24 +143,19 @@ def load_dataset(args):
         All textual data is assigned a target of '1', i.e. on-topic, as these all match and will only be permuted later.
     """
      # First load the tokenizer and initialize empty arrays for your encoded inputs and masks    
-    with open(args.resps_path) as f0, open(args.prompts_path) as f1, open(args.image_ids_path) as f2, open(args.image_prompts_path) as f3, open(args.prompt_ids_path) as f4, open(args.topics_path) as f5:
-        responses, prompts = f0.readlines(), f1.readlines()
-        image_ids, image_prompts = f2.readlines(), f3.readlines()
-        prompt_ids, topics = f4.readlines(), f5.readlines()
+    with open(args.resps_path) as f0, open(args.prompts_path) as f1, open(args.prompt_ids_path) as f4, open(args.topics_path) as f5:
         
         # Stripping the arrays to match the formating 
+        responses, prompts = f0.readlines(), f1.readlines()
+        prompt_ids, topics = f4.readlines(), f5.readlines()
+        prompt_ids = [x.strip().lower() for x in prompt_ids[:10]]
+        prompts = [x.strip().lower() for x in prompts[:10]]
+        responses = [x.strip().lower() for x in responses[:10]]
+        topics = [x.strip().lower() for x in topics[:10]]
         # prompt_ids = [x.strip().lower() for x in prompt_ids]
         # prompts = [x.strip().lower() for x in prompts]
         # responses = [x.strip().lower() for x in responses]
         # topics = [x.strip().lower() for x in topics]
-        # image_ids = [x.strip().lower() for x in image_ids]
-        # image_prompts = [x.strip().lower() for x in image_prompts]
-        prompt_ids = [x.strip().lower() for x in prompt_ids[:100]]
-        prompts = [x.strip().lower() for x in prompts[:100]]
-        responses = [x.strip().lower() for x in responses[:100]]
-        topics = [x.strip().lower() for x in topics[:100]]
-        image_ids = [x.strip().lower() for x in image_ids[:100]]
-        image_prompts = [x.strip().lower() for x in image_prompts[:100]]
         
         # Create two datasets, using the custom classes defined
         print("Dataset Loaded")
@@ -169,8 +164,14 @@ def load_dataset(args):
         for prompt, prompt_id, response in zip(prompts, prompt_ids, responses):
             text_data.append(prompt_response(prompt, prompt_id, response, 1))
             
-        for image_id, image_prompt in zip(image_ids, image_prompts):
-            image_data.append(image(image_id, image_prompt))
+        if images:
+            with open(args.image_ids_path) as f2, open(args.image_prompts_path) as f3:
+                image_ids, image_prompts = f2.readlines(), f3.readlines()
+                image_ids = [x.strip().lower() for x in image_ids]
+                image_prompts = [x.strip().lower() for x in image_prompts]
+                            
+            for image_id, image_prompt in zip(image_ids, image_prompts):
+                image_data.append(image(image_id, image_prompt))
         
     return text_data, image_data, topics
 
@@ -194,7 +195,7 @@ def permute_data(text_data, topics, args):
         Takes an existing topic distribution and creates a new list of topics where the probability of a given topic
         is similar to the original.
         Then the code checks that the topic is different to the original topic, and concatenates it to the existing data.
-        Sets the new target to 0 instead of 1 to designate it ass off-topic
+        Sets the new target to 0 instead of 1 to designate it as off-topic
     """
     # Dynamic shuffling in order to generate off-topic samples, based on prompt probability dist.
     unique_prompts_distribution_path = args.topic_dist_path 
