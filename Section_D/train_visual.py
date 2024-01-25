@@ -231,7 +231,7 @@ def main():
     
     # Concatenate vision transformer and BERT hidden states
     VT_hidden_state = VT_hidden_state[:, :, :BERT_hidden_state.shape[2]] 
-    # VT_hidden_state = torch.stack([x.cpu() / np.linalg.norm(x.cpu()) for x in VT_hidden_state])
+    VT_hidden_state = torch.stack([x.cpu() / 100000 for x in VT_hidden_state])
     # BERT_hidden_state = torch.stack([x.cpu() / np.linalg.norm(x.cpu()) for x in BERT_hidden_state])
     concatenated_outputs = torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1)
     

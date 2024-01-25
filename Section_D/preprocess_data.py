@@ -107,10 +107,10 @@ def load_images(image_data, args):
     preprocess = transforms.Compose([
         transforms.Resize(image_size),
         transforms.ToTensor(),
-        transforms.RandomHorizontalFlip(p=0.5), ##
-        transforms.RandomVerticalFlip(p=0.5), ##
-        transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5)), ##
-        transforms.RandomRotation(degrees=(30, 70)) ##
+        transforms.RandomHorizontalFlip(p=0.5), 
+        transforms.RandomVerticalFlip(p=0.5), 
+        # transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5)), ##
+        # transforms.RandomRotation(degrees=(30, 70)) ##
     ])
     
     # Iterate through the ids, find the file and preprocess them
@@ -148,14 +148,14 @@ def load_dataset(args, images = True):
         # Stripping the arrays to match the formating 
         responses, prompts = f0.readlines(), f1.readlines()
         prompt_ids, topics = f4.readlines(), f5.readlines()
-        prompt_ids = [x.strip().lower() for x in prompt_ids[:10000]]
-        prompts = [x.strip().lower() for x in prompts[:10000]]
-        responses = [x.strip().lower() for x in responses[:10000]]
-        topics = [x.strip().lower() for x in topics[:10000]]
-        # prompt_ids = [x.strip().lower() for x in prompt_ids]
-        # prompts = [x.strip().lower() for x in prompts]
-        # responses = [x.strip().lower() for x in responses]
-        # topics = [x.strip().lower() for x in topics]
+        # prompt_ids = [x.strip().lower() for x in prompt_ids[:1000]]
+        # prompts = [x.strip().lower() for x in prompts[:1000]]
+        # responses = [x.strip().lower() for x in responses[:1000]]
+        # topics = [x.strip().lower() for x in topics[:1000]]
+        prompt_ids = [x.strip().lower() for x in prompt_ids]
+        prompts = [x.strip().lower() for x in prompts]
+        responses = [x.strip().lower() for x in responses]
+        topics = [x.strip().lower() for x in topics]
         
         # Create two datasets, using the custom classes defined
         text_data, image_data = [], []
@@ -264,7 +264,6 @@ def encode_data(tokenizer, data, MAX_LEN):
     input_ids, attention_mask = [], []
     input = data.prompt + data.response
     encoding = tokenizer(input, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
-    # input_ids.append(encoding["input_ids"])
     if len(encoding["input_ids"]) > 256:
         input_ids.append(encoding["input_ids"][:256])
         attention_mask.append(encoding["attention_mask"][:256])

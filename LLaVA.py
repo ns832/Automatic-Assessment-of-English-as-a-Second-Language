@@ -34,7 +34,7 @@ parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids
 parser.add_argument('--image_ids_path', type=str, help='Load path of image ids')
 parser.add_argument('--image_prompts_path', type=str, help='Load path of prompts corresponding to image ids')
 parser.add_argument('--labels_path', type=str, help='Load path to labels')
-parser.add_argument('--real', type=bool, help='Is this real or shuffled data')
+parser.add_argument('--real', type=bool, default=False, help='Is this real or shuffled data')
 
 # Global Variables
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -42,32 +42,39 @@ print(device)
 args = parser.parse_args()
 
 
-def permute_data(prompt_ids, val, device): 
+def get_targets(args, topics, text_data):
     """
-        Takes in the prompt ids and shuffles them to create additional off-topic prompt-response pairs
+        Creates targets for the two different types of testing; synthetic and real.
+        Real simply shuffles the dataset incase a smaller test is desired, synthetic 
+        isolates the on-topic answers, calls the permute_data() function and then shuffles.
     """
-    # Dynamic shuffling in order to generate off-topic samples, based on prompt probability dist.
-    unique_prompts_distribution_path = args.topic_dist_path
-    prompt_distribution = np.loadtxt(unique_prompts_distribution_path, dtype=np.int32)
-    prompt_distribution = prompt_distribution / np.linalg.norm(prompt_distribution, 1)
     
-    number_of_questions = len(prompt_distribution)
-    new_prompt_ids = np.random.choice(number_of_questions, val, p=prompt_distribution)
+    targets = np.loadtxt(args.labels_path, dtype=int)
+    if args.real == False:
+        text_data = [x for (x, y) in zip(text_data, targets) if y == 1]
+        text_data = preprocess_data.permute_data(text_data[:500], topics, args)
+        targets = [1] * int(len(text_data) / 2) + [0] * int(len(text_data) / 2 )
+
+    # Shuffle the lists together to keep the Q-A pairs and their corresponding targets together
+    temp = list(zip(text_data, targets))
+    np.random.shuffle(temp)
+    text_data, targets = zip(*temp[:1000])
+    targets = torch.tensor(targets)
+    text_data = list(text_data)
     
-    for i in range(val):
-        while (new_prompt_ids[i] == prompt_ids[i]):
-            new_prompt_ids[i] = np.random.choice(number_of_questions, 1, p=prompt_distribution)
-    prompt_ids += list(new_prompt_ids)
+    # Print prevelance of off-topic responses
+    off_targets = [x for (x, y) in zip(text_data, targets) if y == 0]
+    print("Dataset size: ", len(text_data) , "Proportions: ", len(off_targets) / len(targets))
+    assert (len(targets) == len(text_data))
     
-    print("Data permuted")
-    return prompt_ids
+    return text_data, targets
 
 
 def create_prompts(text_data):
     """
         Creates prompts to feed into the LLM with the prompt and response pairs
     """
-    LLaMA_prompt = 'Given this image and this question and answer pair, return either ”On” or ”Off” depending on if it is on-topic or off-topic. '
+    LLaMA_prompt = 'Given this image and this question and answer pair, return a single-word response of either ”On” or ”Off” depending on if it is on-topic or off-topic. '
     LLaMA_prompt_list = []
     prompts = [x.prompt.strip().lower().replace("</s>", "") for x in text_data]
     responses = [x.response.strip().lower().replace("</s>", "") for x in text_data]
@@ -144,6 +151,48 @@ def get_probabilities(logits, on_token, off_token):
 
     return score
 
+def calculate_normalised_metrics(targets_1, y_pred_all_1, r=0.5):
+    targets_1 = 1.-targets_1
+    y_preds_1 = 1.-y_pred_all_1
+    precision_1, recall_1, thresholds_1 = precision_recall_curve(targets_1, y_preds_1)
+    
+    for i in range(len(precision_1)):
+        if precision_1[i] == 0 or recall_1[i] == 0:
+            precision_1[i] += 0.01
+            recall_1[i] += 0.01
+    
+    f_score_1_orig = (np.amax((1.+0.5**2) * ((precision_1 * recall_1) / (0.5**2 * precision_1 + recall_1))))
+    targets_1, y_preds_1 = torch.tensor(targets_1, device = 'cpu'), torch.tensor(y_preds_1, device = 'cpu')
+    p_1_list = precision_1**(-1) - 1
+    n_1_list = recall_1**(-1) - 1
+    
+    # Add in the last threshold that the p-r curve doesn't output doesn't include
+    thresholds_1 = np.concatenate([thresholds_1, [y_preds_1.max()]]) 
+    f_scores_1 = []
+    
+    for threshold, p_1, n_1 in zip(thresholds_1, p_1_list, n_1_list):
+        tp, fp, tn, fn = 0, 0, 0, 0
+        for target, y_pred in zip(targets_1, y_preds_1):
+            pred = (y_pred.item() >= threshold)
+            if pred == 1 and target == 1: tp += 1
+            elif pred == 1 and target == 0: fp += 1
+            elif pred == 0 and target == 0: tn += 1
+            elif pred == 0 and target == 1: fn += 1
+            
+        # Avoid divide by zero error
+        if tn + fp == 0:
+            fp += 1
+            fn += 1 
+        # h is calculated from the ground truth positive and negative classes
+        h = (tp + fn) / (tn + fp)
+        k_1 = (h * (r**(-1) - 1))
+        f_scores_1.append((1.+0.5**2) / ((1.+0.5**2) + (0.5**2)* n_1 + p_1 * k_1))
+        
+    f_score_1 = max(f_scores_1)
+    
+    print("Normalised F0.5 scores are:", f_score_1)
+    print("Original F0.5 scores are:", f_score_1_orig)
+    
 
 def calculate_metrics(targets, y_pred_all):
     targets = 1.-targets
@@ -175,24 +224,6 @@ def calculate_metrics(targets, y_pred_all):
     print('/scratches/dialfs/alta/relevance/ns832/results' + '/LLaVA_' + str(f_score) +  '_plot.jpg')
     fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/LLaVA_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
 
-def get_targets(args, topics, text_data):
-    """
-        Creates targets for the two different types of testing; synthetic and real.
-        Real simply shuffles the dataset incase a smaller test is desired, synthetic 
-        isolates the on-topic answers, calls the permute_data() function and then shuffles.
-    """
-    targets = np.loadtxt(args.labels_path, dtype=int)
-    if args.real == False:
-        print("Shuffling real data to create synthetic")
-        text_data = [x for (x, y) in zip(text_data, targets) if y == 1]
-        targets = [1] * len(text_data) + [0] * len(text_data)
-        text_data = preprocess_data.permute_data(text_data[:500], topics, args)
-        assert (len(targets) == len(text_data))
-    temp = list(zip(text_data, targets))
-    np.random.shuffle(temp)
-    text_data, targets = zip(*temp[:1000])
-    targets = torch.tensor(targets)
-    return text_data, targets
 
 def main(args):
     
@@ -219,6 +250,7 @@ def main(args):
     prob_list = np.array(prob_list)
  
     calculate_metrics(targets, prob_list)
+    calculate_normalised_metrics(targets, prob_list)
         
         
 
