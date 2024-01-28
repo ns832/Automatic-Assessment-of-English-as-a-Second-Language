@@ -148,10 +148,6 @@ def load_dataset(args, images = True):
         # Stripping the arrays to match the formating 
         responses, prompts = f0.readlines(), f1.readlines()
         prompt_ids, topics = f4.readlines(), f5.readlines()
-        # prompt_ids = [x.strip().lower() for x in prompt_ids[:1000]]
-        # prompts = [x.strip().lower() for x in prompts[:1000]]
-        # responses = [x.strip().lower() for x in responses[:1000]]
-        # topics = [x.strip().lower() for x in topics[:1000]]
         prompt_ids = [x.strip().lower() for x in prompt_ids]
         prompts = [x.strip().lower() for x in prompts]
         responses = [x.strip().lower() for x in responses]
@@ -237,7 +233,7 @@ def encode_images(image_data, feature_extractor):
 def encode_dataset(tokenizer, text_data, image_data):
     """
         Encodes the entire text data by calling the function encode_data().
-        Also create targets
+        Adds the corresponding images to a list
     """
     max_prompt_length = 256
     

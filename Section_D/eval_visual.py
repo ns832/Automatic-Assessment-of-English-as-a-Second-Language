@@ -9,6 +9,7 @@ import preprocess_data, load_models
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import BertTokenizer 
+import Section_D.metrics as metrics
 
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
@@ -102,37 +103,6 @@ def get_hidden_state(model, visual_model, device, eval_dataloader):
     concatenated_outputs = torch.cat(concatenated_outputs, dim=0).squeeze()
     return concatenated_outputs
 
-        
-def calculate_metrics(targets, y_pred_all):
-    targets = 1.-targets
-    y_pred = 1.-y_pred_all
-    targets, y_pred = torch.tensor(targets, device = 'cpu'), torch.tensor(y_pred, device = 'cpu')
-    precision, recall, _ = precision_recall_curve(targets, y_pred)
-    
-    print("Precision:", precision)
-    print("Recall:", recall)
-    
-    #create precision recall curve
-    fig, ax = plt.subplots()
-    ax.plot(recall, precision, color='purple')
-
-    #add axis labels to plot
-    ax.set_title('Precision-Recall Curve')
-    ax.set_ylabel('Precision')
-    ax.set_xlabel('Recall')
-    for i in range(len(precision)):
-        if precision[i] == 0 or recall[i] == 0:
-            precision[i] += 0.1
-            recall[i] += 0.1
-            
-    f_score = np.amax( (1.+0.5**2) * ( (precision * recall) / (0.5**2 * precision + recall) ) )
-    print("F0.5 score is:", f_score)
-
-    #display plot
-    fig.show()
-    fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_visual_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
-    print('/scratches/dialfs/alta/relevance/ns832/results' + '/eval_visual_' + str(f_score) +  '_plot.jpg')
-
 def load_classification_head(hidden_state):
     # Load Classification Head
     head = nn.Sequential(
@@ -180,7 +150,7 @@ def main():
     results = classification_head(hidden_state)
     y_pred_all = np.array(results.detach())
     targets = np.array([x.target for x in data_train])
-    calculate_metrics(targets, y_pred_all)
+    metrics.calculate_metrics(targets, y_pred_all)
 
 if __name__ == '__main__':
     main() 
