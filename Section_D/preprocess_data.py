@@ -12,7 +12,7 @@ import random
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
-class prompt_response():
+class text():
     def __init__(self, prompt, prompt_id, response, target):
         self.prompt = prompt
         self.response = response
@@ -140,35 +140,46 @@ def load_dataset(args, images = True):
         The image ids and prompts match up, however with the textual data the prompt, reponses and ids match up, 
         but the topics are separate. Creates two new arrays, one for textual data and one for visual.
         
-        All textual data is assigned a target of '1', i.e. on-topic, as these all match and will only be permuted later.
+        All textual data is assigned a target of '1' if no targets are given.
     """
      # First load the tokenizer and initialize empty arrays for your encoded inputs and masks    
-    with open(args.resps_path) as f0, open(args.prompts_path) as f1, open(args.prompt_ids_path) as f4, open(args.topics_path) as f5:
+    with open(args.resps_path) as f0, open(args.prompts_path) as f1, open(args.topics_path) as f2:
         
         # Stripping the arrays to match the formating 
-        responses, prompts = f0.readlines(), f1.readlines()
-        prompt_ids, topics = f4.readlines(), f5.readlines()
-        prompt_ids = [x.strip().lower() for x in prompt_ids]
+        responses, prompts, topics = f0.readlines(), f1.readlines(), f2.readlines()
         prompts = [x.strip().lower() for x in prompts]
         responses = [x.strip().lower() for x in responses]
         topics = [x.strip().lower() for x in topics]
         
-        # Create two datasets, using the custom classes defined
-        text_data, image_data = [], []
+    # Create two datasets, using the custom classes defined
+    text_data, image_data = [], []
+    
+    # Optional prompt ids dealt with
+    if args.prompt_ids_path: 
+        prompt_ids = [x.strip().lower() for x in open(args.prompt_ids_path).readlines()]
+    else: prompt_ids = [None for x in prompts]
         
-        for prompt, prompt_id, response in zip(prompts, prompt_ids, responses):
-            text_data.append(prompt_response(prompt, prompt_id, response, 1))
+    # Optional labels dealt with
+    if args.labels_path: 
+        # targets = [int(x) for x in open(args.labels_path).readlines()]
+        targets = np.loadtxt(args.labels_path, dtype=int)
+        off_targets = [x for x in targets if x == 0]
+        print("Dataset size: ", len(targets) , "Proportions: ", len(off_targets) / len(targets))
+    else: targets = [1 for x in prompts]
+        
+    for prompt, prompt_id, response, target in zip(prompts, prompt_ids, responses, targets):
+        text_data.append(text(prompt, prompt_id, response, target))
+        
+    if images:
+        with open(args.image_ids_path) as f3, open(args.image_prompts_path) as f4:
+            image_ids, image_prompts = f3.readlines(), f4.readlines()
+            image_ids = [x.strip().lower() for x in image_ids]
+            image_prompts = [x.strip().lower() for x in image_prompts]
+                        
+        for image_id, image_prompt in zip(image_ids, image_prompts):
+            image_data.append(image(image_id, image_prompt))
             
-        if images:
-            with open(args.image_ids_path) as f2, open(args.image_prompts_path) as f3:
-                image_ids, image_prompts = f2.readlines(), f3.readlines()
-                image_ids = [x.strip().lower() for x in image_ids]
-                image_prompts = [x.strip().lower() for x in image_prompts]
-                            
-            for image_id, image_prompt in zip(image_ids, image_prompts):
-                image_data.append(image(image_id, image_prompt))
-                
-        print("Dataset Loaded: ", len(text_data))
+    print("Dataset Loaded: ", len(text_data))
     return text_data, image_data, topics
 
 
@@ -208,7 +219,7 @@ def permute_data(text_data, topics, args):
     
     # Append to the list new prompt_response objects that have the same order of responses as the original text_data, but have shuffled prompts/ids
     for prompt_id, data in zip(new_prompt_ids, text_data):
-        text_data.append(prompt_response(topics[int(prompt_id)], prompt_id, data.response, 0))
+        text_data.append(text(topics[int(prompt_id)], prompt_id, data.response, 0))
         
     print("Data Permuted")
     return text_data

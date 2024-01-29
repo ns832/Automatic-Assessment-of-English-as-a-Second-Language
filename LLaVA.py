@@ -14,6 +14,7 @@ from PIL import Image
 from PIL import Image
 from transformers import TextStreamer
 import Section_D.preprocess_data as preprocess_data
+import Section_D.metrics as metrics
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model-path", type=str, default="facebook/opt-350m")
@@ -50,24 +51,19 @@ def get_targets(args, topics, text_data):
     """
     
     targets = np.loadtxt(args.labels_path, dtype=int)
+    for data, target in zip(text_data, targets):
+        data.target = target
+        
     if args.real == False:
-        text_data = [x for (x, y) in zip(text_data, targets) if y == 1]
+        text_data = [x for x in text_data if x.target == 1]
         text_data = preprocess_data.permute_data(text_data[:500], topics, args)
-        targets = [1] * int(len(text_data) / 2) + [0] * int(len(text_data) / 2 )
 
-    # Shuffle the lists together to keep the Q-A pairs and their corresponding targets together
-    temp = list(zip(text_data, targets))
-    np.random.shuffle(temp)
-    text_data, targets = zip(*temp[:1000])
-    targets = torch.tensor(targets)
-    text_data = list(text_data)
+    np.random.shuffle(text_data)
+    text_data = text_data[:1000]
+    off_targets = [x for x in text_data if x.target == 0]
+    print("Dataset size: ", len(text_data) , "Proportions: ", len(off_targets) / len(text_data))
     
-    # Print prevelance of off-topic responses
-    off_targets = [x for (x, y) in zip(text_data, targets) if y == 0]
-    print("Dataset size: ", len(text_data) , "Proportions: ", len(off_targets) / len(targets))
-    assert (len(targets) == len(text_data))
-    
-    return text_data, targets
+    return text_data
 
 
 def create_prompts(text_data):
@@ -127,6 +123,7 @@ def eval_model(model, LLaMA_prompt_list, image_paths, image_processor, tokenizer
                 max_new_tokens=1, 
                 streamer=streamer,
                 use_cache=False, 
+                # do_sample = False, temperature = 0
                 output_scores=True, 
                 no_repeat_ngram_size = 1, 
                 stopping_criteria=[stopping_criteria])
@@ -151,78 +148,78 @@ def get_probabilities(logits, on_token, off_token):
 
     return score
 
-def calculate_normalised_metrics(targets_1, y_pred_all_1, r=0.5):
-    targets_1 = 1.-targets_1
-    y_preds_1 = 1.-y_pred_all_1
-    precision_1, recall_1, thresholds_1 = precision_recall_curve(targets_1, y_preds_1)
+# def calculate_normalised_metrics(targets_1, y_pred_all_1, r=0.5):
+#     targets_1 = 1.-targets_1
+#     y_preds_1 = 1.-y_pred_all_1
+#     precision_1, recall_1, thresholds_1 = precision_recall_curve(targets_1, y_preds_1)
     
-    for i in range(len(precision_1)):
-        if precision_1[i] == 0 or recall_1[i] == 0:
-            precision_1[i] += 0.01
-            recall_1[i] += 0.01
+#     for i in range(len(precision_1)):
+#         if precision_1[i] == 0 or recall_1[i] == 0:
+#             precision_1[i] += 0.01
+#             recall_1[i] += 0.01
     
-    f_score_1_orig = (np.amax((1.+0.5**2) * ((precision_1 * recall_1) / (0.5**2 * precision_1 + recall_1))))
-    targets_1, y_preds_1 = torch.tensor(targets_1, device = 'cpu'), torch.tensor(y_preds_1, device = 'cpu')
-    p_1_list = precision_1**(-1) - 1
-    n_1_list = recall_1**(-1) - 1
+#     f_score_1_orig = (np.amax((1.+0.5**2) * ((precision_1 * recall_1) / (0.5**2 * precision_1 + recall_1))))
+#     targets_1, y_preds_1 = torch.tensor(targets_1, device = 'cpu'), torch.tensor(y_preds_1, device = 'cpu')
+#     p_1_list = precision_1**(-1) - 1
+#     n_1_list = recall_1**(-1) - 1
     
-    # Add in the last threshold that the p-r curve doesn't output doesn't include
-    thresholds_1 = np.concatenate([thresholds_1, [y_preds_1.max()]]) 
-    f_scores_1 = []
+#     # Add in the last threshold that the p-r curve doesn't output doesn't include
+#     thresholds_1 = np.concatenate([thresholds_1, [y_preds_1.max()]]) 
+#     f_scores_1 = []
     
-    for threshold, p_1, n_1 in zip(thresholds_1, p_1_list, n_1_list):
-        tp, fp, tn, fn = 0, 0, 0, 0
-        for target, y_pred in zip(targets_1, y_preds_1):
-            pred = (y_pred.item() >= threshold)
-            if pred == 1 and target == 1: tp += 1
-            elif pred == 1 and target == 0: fp += 1
-            elif pred == 0 and target == 0: tn += 1
-            elif pred == 0 and target == 1: fn += 1
+#     for threshold, p_1, n_1 in zip(thresholds_1, p_1_list, n_1_list):
+#         tp, fp, tn, fn = 0, 0, 0, 0
+#         for target, y_pred in zip(targets_1, y_preds_1):
+#             pred = (y_pred.item() >= threshold)
+#             if pred == 1 and target == 1: tp += 1
+#             elif pred == 1 and target == 0: fp += 1
+#             elif pred == 0 and target == 0: tn += 1
+#             elif pred == 0 and target == 1: fn += 1
             
-        # Avoid divide by zero error
-        if tn + fp == 0:
-            fp += 1
-            fn += 1 
-        # h is calculated from the ground truth positive and negative classes
-        h = (tp + fn) / (tn + fp)
-        k_1 = (h * (r**(-1) - 1))
-        f_scores_1.append((1.+0.5**2) / ((1.+0.5**2) + (0.5**2)* n_1 + p_1 * k_1))
+#         # Avoid divide by zero error
+#         if tn + fp == 0:
+#             fp += 1
+#             fn += 1 
+#         # h is calculated from the ground truth positive and negative classes
+#         h = (tp + fn) / (tn + fp)
+#         k_1 = (h * (r**(-1) - 1))
+#         f_scores_1.append((1.+0.5**2) / ((1.+0.5**2) + (0.5**2)* n_1 + p_1 * k_1))
         
-    f_score_1 = max(f_scores_1)
+#     f_score_1 = max(f_scores_1)
     
-    print("Normalised F0.5 scores are:", f_score_1)
-    print("Original F0.5 scores are:", f_score_1_orig)
+#     print("Normalised F0.5 scores are:", f_score_1)
+#     print("Original F0.5 scores are:", f_score_1_orig)
     
 
-def calculate_metrics(targets, y_pred_all):
-    targets = 1.-targets
-    y_pred = 1.-y_pred_all
-    targets, y_pred = torch.tensor(targets, device = 'cpu'), torch.tensor(y_pred, device = 'cpu')
-    precision, recall, _ = precision_recall_curve(targets, y_pred)
+# def calculate_metrics(targets, y_pred_all):
+#     targets = 1.-targets
+#     y_pred = 1.-y_pred_all
+#     targets, y_pred = torch.tensor(targets, device = 'cpu'), torch.tensor(y_pred, device = 'cpu')
+#     precision, recall, _ = precision_recall_curve(targets, y_pred)
     
-    print("Precision:", precision)
-    print("Recall:", recall)
+#     print("Precision:", precision)
+#     print("Recall:", recall)
     
-    #create precision recall curve
-    fig, ax = plt.subplots()
-    ax.plot(recall, precision, color='purple')
+#     #create precision recall curve
+#     fig, ax = plt.subplots()
+#     ax.plot(recall, precision, color='purple')
 
-    #add axis labels to plot
-    ax.set_title('Precision-Recall Curve')
-    ax.set_ylabel('Precision')
-    ax.set_xlabel('Recall')
-    for i in range(len(precision)):
-        if precision[i] == 0 or recall[i] == 0:
-            precision[i] += 0.1
-            recall[i] += 0.1
+#     #add axis labels to plot
+#     ax.set_title('Precision-Recall Curve')
+#     ax.set_ylabel('Precision')
+#     ax.set_xlabel('Recall')
+#     for i in range(len(precision)):
+#         if precision[i] == 0 or recall[i] == 0:
+#             precision[i] += 0.1
+#             recall[i] += 0.1
             
-    f_score = np.amax( (1.+0.5**2) * ( (precision * recall) / (0.5**2 * precision + recall) ) )
-    print("F0.5 score is:", f_score)
+#     f_score = np.amax( (1.+0.5**2) * ( (precision * recall) / (0.5**2 * precision + recall) ) )
+#     print("F0.5 score is:", f_score)
 
-    #display plot
-    fig.show()
-    print('/scratches/dialfs/alta/relevance/ns832/results' + '/LLaVA_' + str(f_score) +  '_plot.jpg')
-    fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/LLaVA_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
+#     #display plot
+#     fig.show()
+#     print('/scratches/dialfs/alta/relevance/ns832/results' + '/LLaVA_' + str(f_score) +  '_plot.jpg')
+#     fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/LLaVA_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
 
 
 def main(args):
@@ -230,8 +227,7 @@ def main(args):
     # Preprocess textual data
     text_data, image_data, topics = preprocess_data.load_dataset(args)
     text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
-    text_data, targets = get_targets(args, topics, text_data)
-    print(len(text_data))
+    text_data = get_targets(args, topics, text_data)
 
     # Get model, tokenizer and image processor
     model_name = get_model_name_from_path(args.model_path)
@@ -249,12 +245,10 @@ def main(args):
     prob_list = eval_model(model, LLaMA_prompt_list, image_paths, image_processor, tokenizer)
     prob_list = np.array(prob_list)
  
-    calculate_metrics(targets, prob_list)
-    calculate_normalised_metrics(targets, prob_list)
+    targets = np.array([x.target for x in text_data])
+    metrics.calculate_metrics(targets, prob_list)
+    metrics.calculate_normalised_metrics(targets, prob_list)
         
-        
-
-
 
 if __name__ == "__main__":
     main(args)
