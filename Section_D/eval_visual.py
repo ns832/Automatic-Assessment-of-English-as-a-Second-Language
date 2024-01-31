@@ -74,8 +74,8 @@ def create_dataset(data_train):
     
     # Create and return dataloader
     train_data = TensorDataset(encoded_texts, mask, targets, pixels)
-    train_sampler = RandomSampler(train_data)
-    train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
+    # train_sampler = RandomSampler(train_data)
+    train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
     return train_dataloader
 
 
@@ -103,6 +103,7 @@ def get_hidden_state(model, visual_model, device, eval_dataloader):
     concatenated_outputs = torch.cat(concatenated_outputs, dim=0).squeeze()
     return concatenated_outputs
 
+
 def load_classification_head(hidden_state):
     # Load Classification Head
     head = nn.Sequential(
@@ -115,10 +116,9 @@ def load_classification_head(hidden_state):
     )
     classification_head = ClassificationHead(head, head_2)
     classification_head.load_state_dict(torch.load(args.classification_model_path))
-    # classification_head.to(device)
     classification_head.eval()
-    # classification_head = torch.load(args.classification_model_path)
     return classification_head
+
 
 def main():    
     bert_base_uncased = "prajjwal1/bert-small"

@@ -21,6 +21,7 @@ parser.add_argument('--topic_dist_path', type=str, help='Load path of question t
 parser.add_argument('--image_ids_path', type=str, help='Load path of image ids')
 parser.add_argument('--image_prompts_path', type=str, help='Load path of prompts corresponding to image ids')
 parser.add_argument('--predictions_save_path', type=str, help="Where to save predicted values")
+parser.add_argument('--model_path', type=str, default="/scratches/dialfs/alta/relevance/ns832/results/train_model_unseen/bert_model_0.14654680755471014.pt")
 parser.add_argument('--save_path', type=str, help="Where to save predicted values")
 parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
 parser.add_argument('--learning_rate', type=float, default=1e-5, help='Specify the initial learning rate')
@@ -36,6 +37,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
 args = parser.parse_args()
 
+
 class ClassificationHead(nn.Module):
     def __init__(self, head, head_2):
         super(ClassificationHead, self).__init__()
@@ -45,15 +47,6 @@ class ClassificationHead(nn.Module):
         x = self.head(x).squeeze()
         x = self.head_2(x).squeeze()
         return F.softmax(x, dim=0)
-
-
-def format_time(elapsed):
-    """
-        Used for displaying time when measuring time lengths
-    """
-    
-    elapsed_rounded = int(round((elapsed)))
-    return str(datetime.timedelta(seconds=elapsed_rounded))
         
         
 
@@ -74,11 +67,85 @@ def create_dataset(data_train):
     encoded_texts = torch.tensor(encoded_texts).to(device).squeeze()
     mask = torch.tensor(mask).to(device).squeeze()
     targets = torch.tensor(targets).to(device)
+    
     train_data = TensorDataset(encoded_texts, mask, targets)
-    train_sampler = RandomSampler(train_data)
-    train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
+    # train_sampler = RandomSampler(train_data)
+    train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
     
     return train_dataloader, targets
+
+
+# def train_BERT_model(args, optimizer, model, device, train_dataloader):
+#     """
+#         Runs the training using the train_dataloader created in create_datasets().
+#         Splits the data into batches specified by the args specified by user, runs the training, and returns the last outputs
+#     """
+#     # Specify the sequence of indices/keys used in data loading, want each epoch to have a different order to prevent over fitting
+#     total_steps = len(train_dataloader) * args.n_epochs
+#     scheduler = get_linear_schedule_with_warmup(optimizer,
+#                                                 num_warmup_steps = 306,
+#                                                 num_training_steps = total_steps)
+    
+#     model.train()
+#     hidden_states = torch.empty((0, 256, 512), dtype=torch.float32)
+    
+#     for epoch in range(args.n_epochs):
+#         print("")
+#         print('======== Epoch {:} / {:} ========'.format(epoch + 1, args.n_epochs))
+#         print('Training...')
+#         t0 = time.time()
+#         total_loss = 0
+#         model.train()
+#         model.zero_grad() 
+        
+#         for step, batch in enumerate(train_dataloader):
+#             if step % 40 == 0:
+#                 elapsed = str(datetime.timedelta(seconds=int(round(time.time() - t0))))
+#                 print('  Batch {:>5,}  of  {:>5,}.    Elapsed: {:}.'.format(step, len(train_dataloader), elapsed))
+                
+#             model.zero_grad()
+#             input_batch = (batch[0].to(device)).squeeze(1)
+#             input_mask_batch = (batch[1].to(device)).squeeze(1)
+#             target_batch = batch[2].to(device) 
+            
+#             # First compute the outputs given the current weights, and the current and total loss
+#             outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=target_batch)
+#             loss = outputs.loss
+#             total_loss += loss.item()
+#             # print("loss.item is", loss.item())
+            
+#             # Then perform the backwards pass through the nn, updating the weights based on gradients
+#             optimizer.zero_grad()
+#             loss.backward()
+#             optimizer.step()
+#             scheduler.step()
+#             hidden_states = torch.cat((hidden_states, outputs.hidden_states[-1].detach().cpu()), dim=0)
+        
+#     avg_train_loss = total_loss / len(train_dataloader)
+#     print("")
+#     print("  Average training loss: {0:.2f}".format(avg_train_loss))
+#     print("  Training epoch took: {:}".format(str(datetime.timedelta(seconds=int(round(time.time() - t0))))))
+    
+#     return hidden_states, avg_train_loss
+
+
+def get_hidden_state(model, device, dataloader):
+
+    model.eval()    
+    print("Started evaluation")
+    hidden_states = torch.empty((0, 256, 512), dtype=torch.float32)
+    for batch in dataloader:
+        
+        input_batch = (batch[0].to(device)).squeeze(1)
+        input_mask_batch = (batch[1].to(device)).squeeze(1)
+        target_batch = batch[2].to(device) 
+
+        with torch.no_grad():
+            BERT_outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=target_batch, output_hidden_states = True)
+
+        hidden_states = torch.cat((hidden_states, BERT_outputs.hidden_states[-1].detach().cpu()), dim=0)
+    return hidden_states
+
 
 
 def train_classification_head(args, optimizer, hidden_states, targets):
@@ -90,7 +157,7 @@ def train_classification_head(args, optimizer, hidden_states, targets):
         nn.Linear(hidden_states.shape[1], 1),
         nn.ReLU()
     )
-
+    # Just take the first token cls token from the BERT
     targets = targets.float()
     model = ClassificationHead(head, head_2).to(device)
     criterion = nn.BCEWithLogitsLoss()
@@ -112,62 +179,6 @@ def train_classification_head(args, optimizer, hidden_states, targets):
     return model
 
 
-def train_BERT_model(args, optimizer, model, device, train_dataloader):
-    """
-        Runs the training using the train_dataloader created in create_datasets().
-        Splits the data into batches specified by the args specified by user, runs the training, and returns the last outputs
-    """
-    # Specify the sequence of indices/keys used in data loading, want each epoch to have a different order to prevent over fitting
-    total_steps = len(train_dataloader) * args.n_epochs
-    scheduler = get_linear_schedule_with_warmup(optimizer,
-                                                num_warmup_steps = 306,
-                                                num_training_steps = total_steps)
-    
-    model.train()
-    loss_values = []
-    hidden_states = torch.empty((0, 256, 512), dtype=torch.float32)
-    
-    for epoch in range(args.n_epochs):
-        print("")
-        print('======== Epoch {:} / {:} ========'.format(epoch + 1, args.n_epochs))
-        print('Training...')
-        t0 = time.time()
-        total_loss = 0
-        model.train()
-        model.zero_grad() 
-        
-        for step, batch in enumerate(train_dataloader):
-            if step % 40 == 0 and not step == 0:
-                elapsed = format_time(time.time() - t0)
-                print('  Batch {:>5,}  of  {:>5,}.    Elapsed: {:}.'.format(step, len(train_dataloader), elapsed))
-                loss_values.append(torch.tensor(loss, device = 'cpu'))
-                
-            model.zero_grad()
-            input_batch = (batch[0].to(device)).squeeze(1)
-            input_mask_batch = (batch[1].to(device)).squeeze(1)
-            target_batch = batch[2].to(device) 
-            
-            # First compute the outputs given the current weights, and the current and total loss
-            outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=target_batch)
-            loss = outputs.loss
-            total_loss += loss.item()
-            # print("loss.item is", loss.item())
-            
-            # Then perform the backwards pass through the nn, updating the weights based on gradients
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-            hidden_states = torch.cat((hidden_states, outputs.hidden_states[-1].detach().cpu()), dim=0)
-        
-    avg_train_loss = total_loss / len(train_dataloader)
-    print("")
-    print("  Average training loss: {0:.2f}".format(avg_train_loss))
-    print("  Training epoch took: {:}".format(format_time(time.time() - t0)))
-    
-    return hidden_states, avg_train_loss
-
-
 def save_model(args, model, avg_train_loss):
     """
         Saves the model so it can be accessed for evaluationg
@@ -178,35 +189,24 @@ def save_model(args, model, avg_train_loss):
     return
 
 
-
 def main():    
     bert_base_uncased = "prajjwal1/bert-small"
     preprocess_data.set_seed(args)
     
     # Load Models and Optimisers
     visual_model, image_processor = load_models.load_vision_transformer_model()
-    model = load_models.load_BERT_model(bert_base_uncased, device)
-    optimizer = load_models.load_optimiser(model, args)
+    BERT_model = load_models.load_BERT_model(bert_base_uncased, device)
+    optimizer = load_models.load_optimiser(BERT_model, args)
     
     # Preprocess textual data
     text_data, image_data, topics = preprocess_data.load_dataset(args)
     text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
     
-    
-    print("Shuffling real data to create synthetic")
-    targets = np.loadtxt(args.labels_path, dtype=int)
-    text_data = [x for (x, y) in zip(text_data, targets) if y == 1]
-    targets = [1] * len(text_data) + [0] * len(text_data)
+    # print("Shuffling real data to create synthetic")
+    text_data = [x for x in text_data if x.target == 1]
     text_data = preprocess_data.permute_data(text_data[:500], topics, args)
-    assert (len(targets) == len(text_data))
-    temp = list(zip(text_data, targets))
-    np.random.shuffle(temp)
-    text_data, targets = zip(*temp)
-    targets = torch.tensor(targets)
-    print(len(text_data))
-    
-    
-    # text_data = preprocess_data.permute_data(text_data, topics, args)
+    np.random.shuffle(text_data)
+    text_data = text_data[:500]
     
     # Preprocess visual data
     image_data = preprocess_data.load_images(image_data, args)  
@@ -225,19 +225,22 @@ def main():
         VT_hidden_state = VT_outputs.hidden_states[-1]
 
     # Create dataloader with the text data
-    train_dataloader, targets = create_dataset(data_train)
+    dataloader, targets = create_dataset(data_train)
+    print("Dataset Size: ", len(data_train))
 
-    BERT_hidden_state, avg_train_loss = train_BERT_model(args, optimizer, model, device, train_dataloader)    
+    # BERT_hidden_state, avg_train_loss = train_BERT_model(args, optimizer, model, device, train_dataloader)  
     
     # Concatenate vision transformer and BERT hidden states
+    BERT_model = load_models.load_trained_BERT_model(args)
+    BERT_hidden_state = get_hidden_state(BERT_model, device, dataloader)
     VT_hidden_state = VT_hidden_state[:, :, :BERT_hidden_state.shape[2]] 
-    VT_hidden_state = torch.stack([x.cpu() / 100000 for x in VT_hidden_state])
-    # BERT_hidden_state = torch.stack([x.cpu() / np.linalg.norm(x.cpu()) for x in BERT_hidden_state])
+    VT_hidden_state = torch.stack([x.cpu() / 100 for x in VT_hidden_state])
     concatenated_outputs = torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1)
     
     # Train the classification head and save both models
     train_classification_head(args, optimizer, concatenated_outputs, targets)
-    save_model(args, model, avg_train_loss)
+    raise
+    save_model(args, BERT_model, "test")
 
 if __name__ == '__main__':
     main() 

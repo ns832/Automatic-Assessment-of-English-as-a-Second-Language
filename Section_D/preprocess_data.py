@@ -161,7 +161,6 @@ def load_dataset(args, images = True):
         
     # Optional labels dealt with
     if args.labels_path: 
-        # targets = [int(x) for x in open(args.labels_path).readlines()]
         targets = np.loadtxt(args.labels_path, dtype=int)
         off_targets = [x for x in targets if x == 0]
         print("Dataset size: ", len(targets) , "Proportions: ", len(off_targets) / len(targets))

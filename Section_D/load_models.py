@@ -29,6 +29,7 @@ def load_BERT_model(bert_base_uncased, device):
         model.to(device)
     return model
 
+
 def load_trained_BERT_model(args):
     model = torch.load(args.model_path)
     model.eval().to(device)
