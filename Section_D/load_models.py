@@ -1,5 +1,5 @@
 import torch
-from transformers import ViTForImageClassification, ViTImageProcessor
+from transformers import ViTForImageClassification, ViTImageProcessor, ViTModel
 from transformers import BertForSequenceClassification
 from transformers import AdamW
 
@@ -9,8 +9,11 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def load_vision_transformer_model():
     image_processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
-    # feature_extractor = ViTFeatureExtractor.from_pretrained("google/vit-base-patch16-224")
-    model = ViTForImageClassification.from_pretrained(
+    # model = ViTForImageClassification.from_pretrained(
+    #     "google/vit-base-patch16-224",
+    #     output_hidden_states = True
+    #     )
+    model = ViTModel.from_pretrained(
         "google/vit-base-patch16-224",
         output_hidden_states = True
         )

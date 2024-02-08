@@ -1,10 +1,25 @@
 import torch
 import numpy as np
-from sklearn.metrics import precision_recall_curve
+from sklearn.metrics import precision_recall_curve, PrecisionRecallDisplay
 import matplotlib.pyplot as plt
-
+import os
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def multiplots(predictions_list, targets_list, keys_list):
+    """
+        Plots multiple different precision-recall curves on the same graph.
+        The predictions and targets are fed in from saved files.
+    """
+    fig, ax = plt.subplots()
+    ax.set_title('Precision-Recall Curve')
+    ax.set_ylabel('Precision')
+    ax.set_xlabel('Recall')
+    for predictions, targets, key in zip(predictions_list, targets_list, keys_list):
+        PrecisionRecallDisplay.from_predictions(targets, predictions, ax=ax, name=key, drawstyle="default", pos_label=0)
+    ax.legend()
+    save_image_prompt(" ", fig)
+    
 
 def calculate_normalised_metrics(targets, y_pred_all, r=0.5):
     targets = 1.-targets
@@ -79,18 +94,31 @@ def calculate_metrics(targets, y_pred_all):
     print("F0.5 score is:", f_score)
     save_image_prompt(f_score, fig)
     save_predictions_prompt(f_score, targets, y_pred_all)
+    
 
 def save_image_prompt(f_score, fig):
     while True:
         user_input = input("Do you want to save the image? (y/n): ").lower()
 
         if user_input == 'y':
-            print("Image will be saved.")
-            file_path_model_predictions = ('/scratches/dialfs/alta/relevance/ns832/results' + '/' + str(f_score) +  '_plot.jpg')
-            user_input = input("Default file name is: " + file_path_model_predictions + "\n If a different file path is desired specify here, else press enter.").lower()
-            if user_input: file_path_model_predictions = user_input
-            fig.savefig(file_path_model_predictions, bbox_inches='tight', dpi=150)
-            print("Saved image at: ", file_path_model_predictions)
+            # Get file name
+            file_name = str(f_score) + "_plot.jpg"
+            user_input = input("Image will be saved as: " + file_name + "\n If a different name is desired specify it here, else press enter:")
+            if user_input: file_name = user_input
+            
+            # Get file directory
+            directory = ('/scratches/dialfs/alta/relevance/ns832/results/predictions/' )
+            while True:
+                user_input = input("Default directory is: " + directory + "\n If a different path is desired specify the directory here, else press enter.").lower()
+                if user_input:
+                    if os.path.exists(user_input) and os.path.isdir(user_input):
+                        directory = user_input
+                        break
+                    else:
+                        print("Directory does not exist, try again")
+                else:break
+            fig.savefig(directory + file_name, bbox_inches='tight', dpi=150)
+            print("Saved image at: " + directory + file_name)
             break
         elif user_input == 'n':
             print("Image will not be saved.")
@@ -104,16 +132,28 @@ def save_predictions_prompt(f_score, targets, y_pred_all):
         user_input = input("Do you want to save the predictions and targets? (y/n): ").lower()
 
         if user_input == 'y':
-            print("Predictions and targets will be saved.")
-            file_path_model_predictions = ('/scratches/dialfs/alta/relevance/ns832/results' + '/model_predictions_'+ str(f_score) + '.jpg')
-            file_path_targets = ('/scratches/dialfs/alta/relevance/ns832/results' + '/targets_'+ str(f_score) + '.jpg')
-            user_input_predictions = input("Default file name for predictions is: " + file_path_model_predictions + "\n If a different file path is desired specify here, else press enter.").lower()
-            user_input_targets = input("Default file name for targets is: " + file_path_targets + "\n If a different file path is desired specify here, else press enter.").lower()
-            if user_input: file_path_model_predictions = user_input_predictions
-            if user_input: file_path_targets= user_input_targets
-            np.savetxt(file_path_model_predictions, y_pred_all)
-            np.savetxt(file_path_targets, targets)
-            print("Saved both at: \n", file_path_model_predictions, "\n", file_path_targets)
+            # Get file name
+            pred_file_name = str(f_score) + "_predictions.txt"
+            user_input = input("Predictions will be saved as: " + pred_file_name + "\n If a different name is desired specify it here, else press enter:")
+            if user_input: pred_file_name = user_input
+            targets_file_name = str(f_score) + "_targets.txt"
+            user_input = input("Targets will be saved as: " + targets_file_name + "\n If a different name is desired specify it here, else press enter:")
+            if user_input: targets_file_name = user_input
+            
+            # Get file directory
+            directory = ('/scratches/dialfs/alta/relevance/ns832/results/predictions/' )
+            while True:
+                user_input = input("Default directory is: " + directory + "\n If a different path is desired specify the directory here, else press enter.").lower()
+                if user_input:
+                    if os.path.exists(user_input) and os.path.isdir(user_input):
+                        directory = user_input
+                        break
+                    else:
+                        print("Directory does not exist, try again")
+                else:break
+            np.savetxt(directory + pred_file_name, y_pred_all)
+            np.savetxt(directory + targets_file_name, targets)
+            print("Saved both at: \n" + directory + "\n File Names:" + pred_file_name + "    " + targets_file_name)
             break
         elif user_input == 'n':
             print("Files will not be saved.")
@@ -121,3 +161,38 @@ def save_predictions_prompt(f_score, targets, y_pred_all):
         else:
             print("Invalid response. Please enter 'y' or 'n'.")
 
+
+
+def save_model(model, avg_train_loss):
+    """
+        Saves the model so it can be accessed for evaluationg
+    """
+    
+    while True:
+        user_input = input("Do you want to save the model? (y/n): ").lower()
+
+        if user_input == 'y':
+            # Get file name
+            file_name = 'classification_model_' + str(avg_train_loss) + '.pt'
+            user_input = input("Model will be saved as: " + file_name + "\n If a different name is desired specify it here, else press enter:")
+            if user_input: file_name = user_input
+            
+            # Get file directory
+            directory = ('/scratches/dialfs/alta/relevance/ns832/results/' )
+            while True:
+                user_input = input("Default directory is: " + directory + "\n If a different path is desired specify the directory here, else press enter.").lower()
+                if user_input:
+                    if os.path.exists(user_input) and os.path.isdir(user_input):
+                        directory = user_input
+                        break
+                    else:
+                        print("Directory does not exist, try again")
+                else:break
+            torch.save(model.state_dict(), directory + file_name)    
+            print("Saved model at: " + directory + file_name)
+            break
+        elif user_input == 'n':
+            print("Model will not be saved.")
+            break            
+        else:
+            print("Invalid response. Please enter 'y' or 'n'.")
