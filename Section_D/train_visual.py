@@ -52,22 +52,24 @@ def create_dataset(data_train):
     encoded_texts = np.array([x.text for x in data_train])
     mask = np.array([x.mask for x in data_train])
     targets = np.array([x.target for x in data_train])
+    pixels = np.array([x.pixels for x in data_train])
     
     # Turn into torch tensor and send to cuda, squeezing the dimensions down to 2 dims for all
     encoded_texts = torch.tensor(encoded_texts).to(device).squeeze()
     mask = torch.tensor(mask).to(device).squeeze()
     targets = torch.tensor(targets).to(device)
+    pixels = torch.tensor(pixels).to(device).squeeze()
     
-    train_data = TensorDataset(encoded_texts, mask, targets)
+    text_data = TensorDataset(encoded_texts, mask, targets)
     # train_sampler = RandomSampler(train_data)
-    train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
+    train_dataloader = DataLoader(text_data, batch_size=args.batch_size)
+    image_dataloader = DataLoader(pixels, batch_size=args.batch_size)
     
-    return train_dataloader, targets
+    return train_dataloader, image_dataloader, targets
 
 
 def get_hidden_state(model, device, dataloader):
     
-    print("Started evaluation")
     model.eval()    
     CLS_tokens = torch.empty((0, 512), dtype=torch.float32)
     for batch in dataloader:
@@ -86,52 +88,59 @@ def get_hidden_state(model, device, dataloader):
     return CLS_tokens
 
 
-def get_hidden_state_image(data_train, visual_model):
-    pixels = np.array([x.pixels for x in data_train])
-    pixels = torch.tensor(pixels).to(device).squeeze()
+def get_hidden_state_image( visual_model, dataloader):
     
-    with torch.no_grad():
-        outputs = visual_model(pixels) 
+    visual_model.eval()
+    CLS_tokens = torch.empty((0, 768), dtype=torch.float32)
+    for batch in dataloader:
+        pixels_batch = batch.to(device)
+        
+        with torch.no_grad():
+            outputs = visual_model(pixels_batch) 
+            
         last_hidden_state = outputs.hidden_states[-1].detach().cpu()
-        CLS_tokens = last_hidden_state[:,0,:]
+        CLS_tokens_batch = last_hidden_state[:,0,:]
+        CLS_tokens = torch.cat((CLS_tokens, CLS_tokens_batch), dim=0)
         
     return CLS_tokens
 
 
 def train_classification_head(args, optimizer, train_dataloader, shape, num_labels=1):
-
     classifier = nn.Sequential(
         nn.Dropout(p=0.1),
         nn.Linear(shape, num_labels)
     )
-    # classifier.weight.data.normal_(mean=0.0, std=0.02)
 
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(
         classifier.parameters(),
         # eps = args.adam_epsilon,
         lr=args.learning_rate
         )
-
+    scheduler = get_linear_schedule_with_warmup(optimizer,
+                                                num_warmup_steps = 200,
+                                                num_training_steps = len(train_dataloader) * args.n_epochs)
+    
     print("Training Classification Head")
     for epoch in range(args.n_epochs):
+        print("Epoch: ", epoch, " of ", args.n_epochs)
         classifier.train()
         classifier.zero_grad()
-        print("Epoch: ", epoch, " of ", args.n_epochs)
+        
         for batch in train_dataloader:
-            optimizer.zero_grad()
+            classifier.zero_grad()
             hidden_states = batch[0].squeeze(1)
             targets_batch = batch[1].float().cpu()
             
             logits = classifier(hidden_states).squeeze(dim=1)
             loss = criterion(logits.view(-1, num_labels), targets_batch.view(-1, num_labels))
             
-            # Then perform the backwards pass through the nn, updating the weights based on gradients
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            scheduler.step()
+            
         print(loss.item())
-    # metrics.save_model(classifier, loss.item())
     return classifier
 
 # def data_whitening(BERT_CLS_tokens, VT_CLS_tokens):
@@ -162,7 +171,7 @@ def main():
     
     # Shuffling real data to create synthetic
     text_data = [x for x in text_data if x.target == 1]
-    text_data = preprocess_data.permute_data(text_data[:1000], topics, args)
+    text_data = preprocess_data.permute_data(text_data[:4], topics, args)
     np.random.shuffle(text_data)
     
     # Preprocess visual data
@@ -173,34 +182,30 @@ def main():
     
 
     # Create dataloader with the text data
-    dataloader, targets = create_dataset(data_train)
+    dataloader, image_dataloader, targets = create_dataset(data_train)
     print("Dataset Size: ", len(data_train))
 
     # Concatenate vision transformer and BERT hidden states
     BERT_CLS_tokens = get_hidden_state(BERT_model, device, dataloader)
-    # VT_CLS_tokens = get_hidden_state_image(data_train, visual_model)
+    VT_CLS_tokens = get_hidden_state_image(visual_model, image_dataloader)
     # CLS_tokens = data_whitening(BERT_CLS_tokens, VT_CLS_tokens)
     # VT_CLS_tokens = torch.stack([x * 0 for x in VT_CLS_tokens])
     # print("B", BERT_CLS_tokens)
     # print("V", VT_CLS_tokens) 
     
-    train_data = TensorDataset(BERT_CLS_tokens[:500], targets[:500])
-    train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
-    classifier = train_classification_head(args, optimizer, train_dataloader, shape=BERT_CLS_tokens.shape[1])
+    # train_data = TensorDataset(BERT_CLS_tokens[:500], targets[:500])
+    # train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
+    # classifier = train_classification_head(args, optimizer, train_dataloader, shape=BERT_CLS_tokens.shape[1])
     
     # Train the classification head and save both models
-    # BERT_CLS_tokens = torch.cat((VT_CLS_tokens.cpu(), BERT_CLS_tokens.cpu()), dim=1)
-    # classifier = train_classification_head(args, optimizer, BERT_CLS_tokens[:500], targets[:500])
-    
-    # Eval on Train
-    logits = classifier(BERT_CLS_tokens[:500])
-    y_pred_all = np.array(logits.detach())
-    metrics.calculate_metrics(targets[:500], y_pred_all)
-    
+    # CLS_tokens = torch.cat((VT_CLS_tokens.cpu(), BERT_CLS_tokens.cpu()), dim=1)
+    classifier = train_classification_head(args, optimizer, BERT_CLS_tokens, targets)
+  
     # Eval on Test
     logits = classifier(BERT_CLS_tokens[500:])
     y_pred_all = np.array(logits.detach())
     metrics.calculate_metrics(targets[500:], y_pred_all)
+    metrics.save_model(classifier, "_")
     
 
 

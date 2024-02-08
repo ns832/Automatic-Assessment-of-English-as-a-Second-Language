@@ -228,13 +228,25 @@ def permute_data(text_data, topics, args):
 def encode_images(image_data, feature_extractor):
     """
         Takes in an array of images and processes them using a pretrained image processor.
-        Sets the corresponding class attributes to the new values
+        Reduces the time by storing computed values in a dictionary and reusing them.
+        Sets the corresponding class attributes to the new values.
     """
+    # Create image_dict that stores images and their corresponding pixel values
+    image_dict = dict()
+    
     # Iterate through lists, processing the image and returning a pytorch tensor
     for image in image_data:
+        # Check that there is an image
         if image.image != None:
-            inputs = feature_extractor(image.image, return_tensors="pt", do_rescale=True).to(device)
-            image.add_encodings((inputs.pixel_values).cpu())
+            if image.image in image_dict.keys():
+                image.add_encodings((image_dict[image.image]).cpu())
+            else:
+                inputs = feature_extractor(image.image, return_tensors="pt", do_rescale=True).to(device)
+                pixel_values = (inputs.pixel_values).cpu()
+                image.add_encodings(pixel_values)
+                
+                # Add entry to image_dict
+                image_dict[image.image] = pixel_values
             
     return image_data
 
