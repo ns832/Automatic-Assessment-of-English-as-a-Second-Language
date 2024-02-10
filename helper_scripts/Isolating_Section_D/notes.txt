@@ -1,0 +1,154 @@
+Bash commands for BERT
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+TRAIN-SEEN:
+python3 train_BERT.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/training/prompts.txt --responses_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/training/responses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/training/prompt_ids.txt --topics_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/training/topics.txt --topic_dist_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/training/topics_dist.txt --save_path /scratches/dialfs/alta/relevance/ns832/results --n_epochs 1
+
+TRAIN-UNSEEN:
+python3 train_BERT.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/prompts.txt --responses_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/responses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/prompt_ids.txt --save_path /scratches/dialfs/alta/relevance/ns832/results --n_epochs 1 --batch_size 24 --topics_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/topics.txt
+
+EVAL-REAL:
+python3 eval_BERT.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/all_words/prompts.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/all_words/responses.txt --labels_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/all_words/targets.txt --model_path /scratches/dialfs/alta/relevance/ns832/results/train_model_seen/bert_model_0.1735147401602505.pt --predictions_save_path /scratches/dialfs/alta/relevance/ns832/results/predictions.txt
+
+EVAL-SHUFFLED:
+python3 eval_BERT.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/shuffled/prompts.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/shuffled/responses.txt --labels_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/shuffled/targets.txt --model_path /scratches/dialfs/alta/relevance/ns832/results/train_model_unseen/bert_model_0.14654680755471014.pt --predictions_save_path /scratches/dialfs/alta/relevance/ns832/results/predictions.txt
+
+
+
+
+
+Comparing PR curves
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+python3 compare_PR_curves.py --prompts_path_1 /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/prompts.txt --resps_path_1 /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/responses.txt --labels_path_1 /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/targets.txt --model_path_1 /scratches/dialfs/alta/relevance/ns832/results/train_model_seen/bert_model_0.1735147401602505.pt --predictions_save_path_1 /scratches/dialfs/alta/relevance/ns832/results/predictions.txt --prompts_path_2 /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/prompts.txt --resps_path_2 /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/responses.txt --labels_path_2 /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/targets.txt --model_path_2 /scratches/dialfs/alta/relevance/ns832/results/train_model_seen/bert_model_0.1735147401602505.pt --predictions_save_pa th_2 /scratches/dialfs/alta/relevance/ns832/results/predictions.txt
+
+python3 compare_PR_curves.py --prompts_path_1 /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/prompts.txt --resps_path_1 /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/responses.txt --labels_path_1 /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/targets.txt --model_path_1 /scratches/dialfs/alta/relevance/ns832/results/train_model_unseen/bert_model_0.14654680755471014.pt --predictions_save_path_1 /scratches/dialfs/alta/relevance/ns832/results/predictions.txt --prompts_path_2 /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/prompts.txt --resps_path_2 /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/responses.txt --labels_path_2 /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/targets.txt --model_path_2 /scratches/dialfs/alta/relevance/ns832/results/train_model_unseen/bert_model_0.14654680755471014.pt --predictions_save_path_2 /scratches/dialfs/alta/relevance/ns832/results/predictions.txt
+
+
+python3 plot_from_file.py --directory_paths /scratches/dialfs/alta/relevance/ns832/results/predictions/ --pred_file_names 0.65865_llava_shuffled_predictions.txt;0.71395_llava_real_preds.txt --targets_file_names 0.65865_llava_shuffled_targets.txt;0.71395_llava_real_targets.txt
+
+
+
+LLaMA
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+REAL
+python3 LLaMA.py --folder_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/
+python3 LLaMA.py --folder_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/
+
+SHUFFLED
+python3 LLaMA.py --folder_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/
+
+
+LLaVA
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+REAL
+python3 LLaVA.py --images_path /scratches/dialfs/alta/bulats/import/reference_materials/scripts/vectra1/BULATS_Prompt_task_120813_RS_files_byScript/ --load-4bit  --folder_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/ 
+--folder_path_images /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/
+
+REAL - NO IMAGES
+python3 LLaVA.py --load-4bit  --folder_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/
+
+SHUFFLED
+python3 LLaVA.py --folder_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/ --images_path /scratches/dialfs/alta/bulats/import/reference_materials/scripts/vectra1/BULATS_Prompt_task_120813_RS_files_byScript/ --load-4bit  --image_ids_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/image_ids.txt --image_prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/image_questions.txt 
+
+SHUFFLED - NO IMAGES
+python3 LLaVA.py --load-4bit --folder_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/ --real False
+
+
+
+
+
+SECTION D ONLY ( 0.1735147401602505 = seen, 0.14654680755471014 = unseen)
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+TRAIN-SEEN:
+python3 train_BERT.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/section_D_training/prompts.txt --responses_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/section_D_training/responses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/section_D_training/prompt_ids.txt --topics_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/training/topics.txt" --topic_dist_path /scratches/dialfs/alta/relevance/ns832/data/train_seen/section_D_training/topics_dist.txt" --save_path /scratches/dialfs/alta/relevance/ns832/results --n_epochs 1
+
+EVAL-SHUFFLED:
+python3 eval_BERT.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/prompts.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/responses.txt --labels_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/targets.txt --model_path /scratches/dialfs/alta/relevance/ns832/results/train_model_seen/bert_model_0.1735147401602505.pt --predictions_save_path /scratches/dialfs/alta/relevance/ns832/results/predictions.txt
+
+EVAL-REAL:
+python3 eval_BERT.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/prompts.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/responses.txt --labels_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/targets.txt --model_path /scratches/dialfs/alta/relevance/ns832/results/train_model_seen/bert_model_0.1735147401602505.pt --predictions_save_path /scratches/dialfs/alta/relevance/ns832/results/predictions.txt
+
+
+Creating files with only section D:(Train Unseen)
+python3 isolate_section_D.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/prompts.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/responses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/prompt_ids.txt --sections_path /home/dawna/alta/relevance/kmk/data/GKTS4/BLXXXgrp24_CDE.rnnlm/sections.txt --save_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/section_D_training/
+
+Creating files with only section D:(Eval Real)
+python3 isolate_section_D.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/shuffled/prompts.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/shuffled/responses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/shuffled/prompt_ids.txt --sections_path /home/alta/relevance/vr311/data_GKTS4_rnnlm/LINSKevl07/sections.txt --save_path /scratches/dialfs/alta/relevance/ns832/data/eval_shuffled/section_D_eval/
+
+python3 isolate_section_D.py --prompts_path /home/dawna/alta/relevance/kmk/data/GKTS4/BLXXXgrp24_CDE.rnnlm/prompts.txt --resps_path /home/dawna/alta/relevance/kmk/data/GKTS4/BLXXXgrp24_CDE.rnnlm/responses.txt --prompt_ids_path /home/dawna/alta/relevance/kmk/data/GKTS4/BLXXXgrp24_CDE.rnnlm/prompt_ids.txt --sections_path /home/dawna/alta/relevance/kmk/data/GKTS4/BLXXXgrp24_CDE.rnnlm/sections.txt --save_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/
+
+
+
+Locations:
+Train_Seen: /home/alta/relevance/vr311/data_GKTS4_trigram/LIESTgrp05a/sections.txt   
+Eval_Shuffled: /home/alta/relevance/vr311/data_GKTS4_rnnlm/LINSKevl07/                  
+Train_Unseen: LXXXgrp24_CDE.rnnlm
+Eval_Real: LIESToft01.rnnlm
+
+
+(TRAIN_UNSEEN)
+python3 Section_D_finder.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/prompts.txt --search_path /home/dawna/alta/relevance/kmk/data/GKTS4 --resps_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/responses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/train_unseen/all_words/prompt_ids.txt
+
+(EVAL_REAL)
+python3 Section_D_finder.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/all_words/prompts.txt --search_path /home/dawna/alta/relevance/kmk/data/GKTS4/LIESToft01.rnnlm/ --resps_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/all_words/responses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/all_words/prompt_ids.txt --save_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/section_D_eval/ --targets_path /scratches/dialfs/alta/relevance/ns832/data/eval_real/all_words/targets.txt
+
+
+
+
+
+
+
+
+BULATS:
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+python3 train_BERT.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/prompts.txt --responses_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/responses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/prompt_ids.txt --topics_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm//topics.txt --topic_dist_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/topics_dist.txt --save_path /scratches/dialfs/alta/relevance/ns832/results --n_epochs 1
+
+python3 eval_BERT.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/prompts_shuffled.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/responses_shuffled.txt --predictions_save_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/results --model_path /scratches/dialfs/alta/relevance/ns832/results/train_visual/bert_model_0.25590548678962083.pt --labels_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/new_targets.txt
+
+
+python3 shuffle_BULATS.py --prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/prompts.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/responses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/prompt_ids.txt --save_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/ --topics_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/topics.txt --topic_dist_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/topics_dist.txt 
+
+
+
+
+
+
+
+Vision Transformer:
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+python3 train_visual.py --images_path /scratches/dialfs/alta/bulats/import/reference_materials/scripts/vectra1/BULATS_Prompt_task_120813_RS_files_byScript --prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/prompts_shuffled.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/responses_shuffled.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/prompt_ids.txt --topics_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/topics.txt --topic_dist_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/topics_dist.txt --predictions_save_path /scratches/dialfs/alta/relevance/ns832/results/predictions.txt --image_ids_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/image_ids.txt --image_prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/image_questions.txt --save_path /scratches/dialfs/alta/relevance/ns832/results
+
+python3 eval_visual.py --images_path /scratches/dialfs/alta/bulats/import/reference_materials/scripts/vectra1/BULATS_Prompt_task_120813_RS_files_byScript --prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/prompts_shuffled.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/responses_shuffled.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/prompt_ids.txt --topics_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/topics.txt --topic_dist_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/topics_dist.txt --predictions_save_path /scratches/dialfs/alta/relevance/ns832/results/predictions.txt --image_ids_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/image_ids.txt --image_prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/image_questions.txt --model_path /scratches/dialfs/alta/relevance/ns832/results/bert_model_0.7574993968009949.pt --classification_model_path /scratches/dialfs/alta/relevance/ns832/results/trial_classification_head.pt
+
+
+python3 train_visual.py --images_path /scratches/dialfs/alta/bulats/import/reference_materials/scripts/vectra1/BULATS_Prompt_task_120813_RS_files_byScript --prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/prompts.txt --resps_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/reponses.txt --prompt_ids_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/prompt_ids.txt --topics_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/topics.txt --topic_dist_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/topics_dist.txt --predictions_save_path /scratches/dialfs/alta/relevance/ns832/results/predictions.txt --image_ids_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/image_ids.txt --image_prompts_path /scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/image_questions.txt --save_path /scratches/dialfs/alta/relevance/ns832/results
+/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data
+
+
+
+
+Bash Command for copying from VM to local
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+scp /scratches/dialfs/alta/relevance/ns832/results/LLaMA_results/LLaMA_0.666931321953156_plot.jpg ns832@gate.eng.cam.ac.uk:
+scp ns832@gate.eng.cam.ac.uk:LLaMA_0.666931321953156_plot.jpg ~/
+scp -o MACs=hmac-sha2-512 ns832@gate.eng.cam.ac.uk:~/LLaMA_0.666931321953156_plot.jpg C:/Users/44774/Documents/Misc
+
+
+
+
+
+
+
+Meeting Notes
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+first do image captioning with zero shot, can compare manual captioning to automatic captioning (without images, but there will be training since we have the original captions)
+
+
+BULATS 
+Linguaskill - unseen ( images at /scratches/dialfs/alta/relevance/imports/ques_images/)
+EN304 Should tie in with speakers first column , write out numbers
