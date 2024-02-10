@@ -3,6 +3,8 @@ from sklearn.metrics import precision_recall_curve
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import requests
+from io import BytesIO
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.conversation import conv_templates, SeparatorStyle
@@ -15,27 +17,32 @@ from PIL import Image
 from transformers import TextStreamer
 import Section_D.preprocess_data as preprocess_data
 import Section_D.metrics as metrics
+import helper_scripts.create_composite_image
 
+# An optional folder_path can be supplied if multiple files are in the same directory - any file_path not given is then assumed to be in this folder
 parser = argparse.ArgumentParser()
-parser.add_argument("--model-path", type=str, default="facebook/opt-350m")
+parser.add_argument('--folder_path', type=str, default=None, help='Load path of the folder containing prompts, responses etc.')
+parser.add_argument('--prompts_path', type=str, default=None, help='Load path of question training data')
+parser.add_argument('--resps_path', type=str, default=None, help='Load path of answer training data')
+parser.add_argument('--prompt_ids_path', type=str, default=None, help='Load path of prompt ids')
+parser.add_argument('--topic_dist_path', type=str, default=None, help='Load path of prompt distribution')
+parser.add_argument('--topics_path', type=str, default=None, help='Load path of topics')
+parser.add_argument('--labels_path', type=str, default=None ,help='Load path to labels')
+
+# An optional image folder_path can be supplied if multiple image files are in the same directory - any file_path not given is then assumed to be in this folder
+parser.add_argument('--folder_path_images', type=str, default=None, help='Optional path for folder containing image data.')
+parser.add_argument("--images_path", type=str, default=None)
+parser.add_argument('--image_ids_path', type=str, default=None, help='Load path of image ids')
+parser.add_argument('--image_prompts_path', type=str, default=None, help='Load path of prompts corresponding to image ids')
+
+parser.add_argument('--real', type=bool, default=None, help='Is this real or shuffled data')
+parser.add_argument('--overlay', type=bool, default=None, help='Is the image to be used an amalgamation of all of them')
+
+# parser.add_argument("--model-path", type=str, default="liuhaotian/llava-v1.5-7b")
 parser.add_argument("--model-base", type=str, default=None)
-parser.add_argument("--images_path", type=str, required=True)
-parser.add_argument("--device", type=str, default="cuda")
 parser.add_argument("--conv-mode", type=str, default=None)
-parser.add_argument("--temperature", type=float, default=0.2)
-parser.add_argument("--max-new-tokens", type=int, default=512)
 parser.add_argument("--load-8bit", action="store_true")
 parser.add_argument("--load-4bit", action="store_true")
-parser.add_argument("--debug", action="store_true")
-parser.add_argument('--prompts_path', type=str, help='Load path of question training data')
-parser.add_argument('--resps_path', type=str, help='Load path of answer training data')
-parser.add_argument('--topics_path', type=str, help='Load path of topics')
-parser.add_argument('--topic_dist_path', type=str, help='Load path of topic distribution')
-parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids')
-parser.add_argument('--image_ids_path', type=str, help='Load path of image ids')
-parser.add_argument('--image_prompts_path', type=str, help='Load path of prompts corresponding to image ids')
-parser.add_argument('--labels_path', type=str, help='Load path to labels')
-parser.add_argument('--real', type=bool, default=False, help='Is this real or shuffled data')
 
 # Global Variables
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -50,36 +57,39 @@ def get_targets(args, topics, text_data):
         isolates the on-topic answers, calls the permute_data() function and then shuffles.
     """
     
-    targets = np.loadtxt(args.labels_path, dtype=int)
-    for data, target in zip(text_data, targets):
-        data.target = target
-        
-    if args.real == False:
-        text_data = [x for x in text_data if x.target == 1]
+    # If the data is not real, all the targets are on-topic therefore the dataset needs to be permuted
+    if not args.labels_path:
+        print("No labels detected")
         text_data = preprocess_data.permute_data(text_data[:500], topics, args)
-
+        
     np.random.shuffle(text_data)
-    text_data = text_data[:1000]
+    text_data = text_data[:1000]  
     off_targets = [x for x in text_data if x.target == 0]
     print("Dataset size: ", len(text_data) , "Proportions: ", len(off_targets) / len(text_data))
-    
+    print(len(text_data))  
     return text_data
 
 
 def create_prompts(text_data):
     """
-        Creates prompts to feed into the LLM with the prompt and response pairs
+        Creates prompts to feed into the LLM with the prompt and response pairs.
+        Prompts are formulated using the suggested [INST] [/INST] format suggested by Mistral.
+    """    
+    # Iterates through the text_data list and creates prompts to feed into the model
+    for data in text_data:
+        if args.images_path and args.overlay == False: LLaMA_prompt = 'Given this image and this question and answer pair, return a single-word response of either ”On” or ”Off” depending on if it is on-topic or off-topic. '
+        else: LLaMA_prompt = 'Ignoring the image. Given this question and answer pair, return a single-word response of either ”On” or ”Off” depending on if it is on-topic or off-topic. '
+        LLaMA_prompt = LLaMA_prompt + 'Question: ' + data.prompt + ' Answer: ' + data.response
+        data.text = LLaMA_prompt
+    # Print a random prompt to check the format of the question is as desired
+    print("Random prompt: ", text_data[np.random.randint(0, len(text_data))].text)
+    return text_data
+
+
+def eval_model(model, text_data, image_paths, image_processor, tokenizer):
     """
-    LLaMA_prompt = 'Given this image and this question and answer pair, return a single-word response of either ”On” or ”Off” depending on if it is on-topic or off-topic. '
-    LLaMA_prompt_list = []
-    prompts = [x.prompt.strip().lower().replace("</s>", "") for x in text_data]
-    responses = [x.response.strip().lower().replace("</s>", "") for x in text_data]
-    for prompt, response in zip(prompts, responses):
-        LLaMA_prompt_list.append(LLaMA_prompt + 'Question: ' + prompt + ' Answer: ' + response)
-    return LLaMA_prompt_list
-
-
-def eval_model(model, LLaMA_prompt_list, image_paths, image_processor, tokenizer):
+        Evaluates the prompts-response-image pairs and outputs a probability list.
+    """
     # Initialise Variables
     disable_torch_init()
     on_token = tokenizer("On").input_ids
@@ -87,13 +97,17 @@ def eval_model(model, LLaMA_prompt_list, image_paths, image_processor, tokenizer
     conv_mode = "llava_v1"
     conv = conv_templates[conv_mode].copy()
     prob_list = []
+    LLaMA_prompt_list = [x.text for x in text_data]
     
     i = 0
     for inp, image_path in zip(LLaMA_prompt_list, image_paths):
         print(i, " of ", len(LLaMA_prompt_list))
         i += 1
-        
-        image = Image.open(image_path).convert('RGB')
+        if image_path.startswith('http://') or image_path.startswith('https://'):
+            response = requests.get(image_path)
+            image = Image.open(BytesIO(response.content)).convert('RGB')
+        else:
+            image = Image.open(image_path).convert('RGB')
         image_tensor = process_images([image], image_processor, model.config)
         image_tensor = image_tensor.to(model.device, dtype=torch.float16)
         
@@ -148,101 +162,44 @@ def get_probabilities(logits, on_token, off_token):
 
     return score
 
-# def calculate_normalised_metrics(targets_1, y_pred_all_1, r=0.5):
-#     targets_1 = 1.-targets_1
-#     y_preds_1 = 1.-y_pred_all_1
-#     precision_1, recall_1, thresholds_1 = precision_recall_curve(targets_1, y_preds_1)
-    
-#     for i in range(len(precision_1)):
-#         if precision_1[i] == 0 or recall_1[i] == 0:
-#             precision_1[i] += 0.01
-#             recall_1[i] += 0.01
-    
-#     f_score_1_orig = (np.amax((1.+0.5**2) * ((precision_1 * recall_1) / (0.5**2 * precision_1 + recall_1))))
-#     targets_1, y_preds_1 = torch.tensor(targets_1, device = 'cpu'), torch.tensor(y_preds_1, device = 'cpu')
-#     p_1_list = precision_1**(-1) - 1
-#     n_1_list = recall_1**(-1) - 1
-    
-#     # Add in the last threshold that the p-r curve doesn't output doesn't include
-#     thresholds_1 = np.concatenate([thresholds_1, [y_preds_1.max()]]) 
-#     f_scores_1 = []
-    
-#     for threshold, p_1, n_1 in zip(thresholds_1, p_1_list, n_1_list):
-#         tp, fp, tn, fn = 0, 0, 0, 0
-#         for target, y_pred in zip(targets_1, y_preds_1):
-#             pred = (y_pred.item() >= threshold)
-#             if pred == 1 and target == 1: tp += 1
-#             elif pred == 1 and target == 0: fp += 1
-#             elif pred == 0 and target == 0: tn += 1
-#             elif pred == 0 and target == 1: fn += 1
-            
-#         # Avoid divide by zero error
-#         if tn + fp == 0:
-#             fp += 1
-#             fn += 1 
-#         # h is calculated from the ground truth positive and negative classes
-#         h = (tp + fn) / (tn + fp)
-#         k_1 = (h * (r**(-1) - 1))
-#         f_scores_1.append((1.+0.5**2) / ((1.+0.5**2) + (0.5**2)* n_1 + p_1 * k_1))
-        
-#     f_score_1 = max(f_scores_1)
-    
-#     print("Normalised F0.5 scores are:", f_score_1)
-#     print("Original F0.5 scores are:", f_score_1_orig)
-    
-
-# def calculate_metrics(targets, y_pred_all):
-#     targets = 1.-targets
-#     y_pred = 1.-y_pred_all
-#     targets, y_pred = torch.tensor(targets, device = 'cpu'), torch.tensor(y_pred, device = 'cpu')
-#     precision, recall, _ = precision_recall_curve(targets, y_pred)
-    
-#     print("Precision:", precision)
-#     print("Recall:", recall)
-    
-#     #create precision recall curve
-#     fig, ax = plt.subplots()
-#     ax.plot(recall, precision, color='purple')
-
-#     #add axis labels to plot
-#     ax.set_title('Precision-Recall Curve')
-#     ax.set_ylabel('Precision')
-#     ax.set_xlabel('Recall')
-#     for i in range(len(precision)):
-#         if precision[i] == 0 or recall[i] == 0:
-#             precision[i] += 0.1
-#             recall[i] += 0.1
-            
-#     f_score = np.amax( (1.+0.5**2) * ( (precision * recall) / (0.5**2 * precision + recall) ) )
-#     print("F0.5 score is:", f_score)
-
-#     #display plot
-#     fig.show()
-#     print('/scratches/dialfs/alta/relevance/ns832/results' + '/LLaVA_' + str(f_score) +  '_plot.jpg')
-#     fig.savefig('/scratches/dialfs/alta/relevance/ns832/results' + '/LLaVA_' + str(f_score) +  '_plot.jpg', bbox_inches='tight', dpi=150)
-
 
 def main(args):
-    
     # Preprocess textual data
-    text_data, image_data, topics = preprocess_data.load_dataset(args)
-    text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
-    text_data = get_targets(args, topics, text_data)
+    if args.images_path: text_data, image_data, topics = preprocess_data.load_dataset(args)
+    else: text_data, image_data, topics = preprocess_data.load_dataset(args, images=False)
+    text_data = get_targets(args, topics, text_data[:1000])
+    if args.images_path: text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
 
     # Get model, tokenizer and image processor
-    model_name = get_model_name_from_path(args.model_path)
-    tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit, device=args.device)
+    model_name = "liuhaotian/llava-v1.5-7b"
+    tokenizer, model, image_processor, context_len = load_pretrained_model(model_name, args.model_base, model_name, args.load_8bit, args.load_4bit, device=device)
     
     # Preprocess visual data
-    image_data = preprocess_data.load_images(image_data, args)   
-    text_data, image_list = preprocess_data.encode_dataset(tokenizer, text_data, image_data)
-    
-    image_paths = [args.images_path + str(x.id.upper() + ".png") for x in image_list]
-    LLaMA_prompt_list = create_prompts(text_data)
-    assert (len(LLaMA_prompt_list) == len(image_paths) == len(text_data))
-    
+    if args.images_path:
+        image_data = preprocess_data.load_images(image_data, args)             
+        text_data, image_list = preprocess_data.encode_dataset(tokenizer, text_data, image_data)
+        
+        # If a composite of all images is to be used instead, set all to overlay.jpg 
+        if args.overlay == True:
+            print("Assigning all images to the composite")
+            composite_path = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/overlay.jpg"
+            image_paths = [composite_path for x in image_list]
+        else: image_paths = [args.images_path + str(x.id.upper() + ".png") for x in image_list]
+        assert (len(image_paths) == len(text_data))
+    else:
+        # If a composite of all images is to be used instead, call helper script  
+        if args.overlay == True:
+            print("Assigning all images to the composite")
+            composite_path = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/overlay.jpg"
+            image_paths = [composite_path for __ in image_list]
+        else:
+            print("Assigning all images to a blank one")
+            file = 'https://upload.wikimedia.org/wikipedia/commons/a/a7/Blank_image.jpg'
+            image_paths = [file for __ in text_data]
+    text_data = create_prompts(text_data)
+
     # Model
-    prob_list = eval_model(model, LLaMA_prompt_list, image_paths, image_processor, tokenizer)
+    prob_list = eval_model(model, text_data, image_paths, image_processor, tokenizer)
     prob_list = np.array(prob_list)
  
     targets = np.array([x.target for x in text_data])
@@ -251,4 +208,16 @@ def main(args):
         
 
 if __name__ == "__main__":
+    if args.folder_path:
+        if args.prompts_path == None: args.prompts_path = str(args.folder_path) + "prompts.txt"
+        if args.resps_path == None: args.resps_path = str(args.folder_path) + "responses.txt"
+        if args.topics_path == None: args.topics_path = str(args.folder_path) + "topics.txt"
+        if args.topic_dist_path == None: args.topic_dist_path = str(args.folder_path) + "topics_dist.txt"
+        if args.labels_path == None: args.labels_path = str(args.folder_path) + "targets.txt"
+    if args.folder_path_images:
+        if args.images_path == None: args.images_path = str(args.folder_path_images)
+        if args.image_ids_path == None: args.image_ids_path = str(args.folder_path_images) + "image_ids.txt"
+        if args.image_prompts_path == None: args.image_prompts_path = str(args.folder_path_images) + "image_questions.txt"
+    if args.images_path == None: print("No images detected, text-only version chosen")
     main(args)
+    
