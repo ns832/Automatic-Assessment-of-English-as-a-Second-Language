@@ -1,9 +1,9 @@
 import argparse
 import torch
-from torch.utils.data import DataLoader, RandomSampler, Dataset
+from torch.utils.data import TensorDataset, DataLoader, RandomSampler, Dataset
 import numpy as np
 import preprocess_data, load_models
-from transformers import get_linear_schedule_with_warmup
+from transformers import get_linear_schedule_with_warmup, BertTokenizer
 import torch.nn as nn
 import torch.optim as optim
 import metrics
@@ -28,11 +28,11 @@ parser.add_argument('--model_path', type=str, default="/scratches/dialfs/alta/re
 
 parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
 parser.add_argument('--batch_size', type=int, default=12, help='Specify the test batch size')
-parser.add_argument('--learning_rate', type=float, default=1e-3, help='Specify the initial learning rate')
+parser.add_argument('--learning_rate', type=float, default=1e-5, help='Specify the initial learning rate')
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
 parser.add_argument('--lr_decay', type=float, default=0.85, help='Specify the learning rate decay rate')
 parser.add_argument('--dropout', type=float, default=0.1, help='Specify the dropout rate')
-parser.add_argument('--n_epochs', type=int, default=5, help='Specify the number of epochs to train for')
+parser.add_argument('--n_epochs', type=int, default=1, help='Specify the number of epochs to train for')
 
 
 # Global Variables
@@ -52,7 +52,6 @@ class CustomDataset(Dataset):
         return {
             'prompt': item.prompt,
             'response': item.response,
-            'image': item.image,
             'target': item.target
         }
     
@@ -64,14 +63,14 @@ class Combined_Model(nn.Module):
         self.image_embedder = image_embedder
         self.linear_head = linear_head
         
-    def forward(self, prompt, response, image):
+    def forward(self, prompt, response):
         prompt_embedding = self.text_embedder.encode(prompt)
         response_embedding = self.text_embedder.encode(response)
         text_embedding = np.concatenate((prompt_embedding, response_embedding), axis=1)
         text_embedding = torch.Tensor(text_embedding)
-        image_embedding = self.image_embedder(image)
-        combined_embedding = torch.cat(text_embedding, image_embedding)        
-        logits = self.linear_head(combined_embedding)
+        # image_embedding = self.image_embedder(image)
+        # combined_embedding = torch.cat(text_embedding, image_embedding)        
+        logits = self.linear_head(text_embedding)
         return logits
 
 
@@ -80,34 +79,16 @@ class LinearHead(nn.Module):
         super(LinearHead, self).__init__()
         self.dropout = nn.Dropout(p=0.1)
         self.linear = nn.Linear(input_size, output_size)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
-        # x = self.dropout(x)
+        x = self.dropout(x)
         x = self.linear(x)
         return x
     
-    
-def encode_dataset(text_data, image_data):
-    """
-        Encodes the entire text data by calling the function encode_data().
-        Adds the corresponding images to a list
-    """
-    
-    # Encode the prompts/responses and save the attention masks, padding applied to the end
-    image_list = []
-    index_to_remove = []
-    for data in text_data:
-        # Find the corresponding image so that later they can be concatenated together
-        image = preprocess_data.find_corresponding_image_id(data.prompt, image_data)[1]
-        if image in image_data: image_list.append(image)
-        else: index_to_remove.append(text_data.index(data))
-            
-    for index in list(reversed(index_to_remove)):
-        text_data.pop(index)
-    return text_data, image_list
-
 
 def train_classifier(args, train_dataloader, classifier):
+    
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.SGD(
         classifier.parameters(),
@@ -120,23 +101,23 @@ def train_classifier(args, train_dataloader, classifier):
     
     for epoch in range(args.n_epochs):
         print("Epoch: ", epoch, " of ", args.n_epochs)
-        classifier.train()
+        # classifier.train()
         
         for batch in train_dataloader:
             classifier.zero_grad()
+            # optimizer.zero_grad()
             prompts_batch = batch['prompt']
             responses_batch = batch['response']
-            image_batch = batch['image']
             targets_batch = batch['target'].float()
-            
-            logits = classifier(prompts_batch, responses_batch, image_batch).squeeze(dim=1)
+            logits = classifier(prompts_batch, responses_batch).squeeze(dim=1)
             loss = criterion(logits, targets_batch)
-            print("Loss: ", loss.item())
             loss.backward()
-
+            
             optimizer.step()
             scheduler.step()
+            print("Loss: ", loss.item())
     
+    # train_BERT.plot_loss(args, loss_values, avg_train_loss)
     return classifier
 
 
@@ -155,49 +136,54 @@ def main(num_labels=1):
     
     # Freeze all parameters except for linear layer
     classifier.train()
-    # for param in classifier.text_embedder.parameters():
-    #     param.requires_grad = False
+    for param in classifier.text_embedder.parameters():
+        param.requires_grad = False
 
     for param in classifier.image_embedder.parameters():
         param.requires_grad = False
     
+    
+    
     # Load data from files
     text_data, image_data, topics = preprocess_data.load_dataset(args)
-    text_data = preprocess_data.remove_incomplete_data(text_data[:500], image_data)
+    # text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
     
     # Shuffling real data to create synthetic
     text_data = [x for x in text_data if x.target == 1]
-    text_data = preprocess_data.permute_data(text_data, topics, args)
+    text_data = preprocess_data.permute_data(text_data[:1000], topics, args)
     np.random.shuffle(text_data)
     
     # Preprocess visual data
-    image_data = preprocess_data.load_images(image_data, args)  
-    text_data, image_list = encode_dataset( text_data, image_data)
-    image_list = preprocess_data.encode_images(image_list, image_processor)
-    print(len(text_data))
-    data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
-    print(len(data_train))
-    print(data_train[0].prompt)
+    # image_data = preprocess_data.load_images(image_data, args)  
+    # text_data, image_list = encode_dataset( text_data, image_data)
+    # image_list = preprocess_data.encode_images(image_list, image_processor)
+    # data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
     
     # Create dataloader
-    # data_train = np.array([x for x in text_data])
-    train_data = CustomDataset(data_train)
+    data_train = np.array([x for x in text_data])
+    train_data = CustomDataset(data_train[:500])
     train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
-    
-    classifier = train_classifier(args, train_dataloader, classifier)
 
 
     # Eval on Test
-    prompts = [x.prompt for x in data_train]
-    responses = [x.response for x in data_train]
-    targets = torch.Tensor([x.target for x in data_train])
-    images = torch.Tensor([x.image for x in data_train])
-    print(len(prompts), len(responses), len(images))
-    logits = classifier(prompts, responses, images)
+    classifier.eval()
+    prompts = [x.prompt for x in data_train[:500]]
+    responses = [x.response for x in data_train[:500]]
+    targets = torch.Tensor([x.target for x in data_train[:500]])
+    logits = classifier(prompts, responses)
+    
     y_pred_all = np.array(logits.detach().cpu())
     metrics.calculate_metrics(targets, y_pred_all)
     metrics.save_model(classifier, "_")
     
+    prompts = [x.prompt for x in data_train[500:]]
+    responses = [x.response for x in data_train[500:]]
+    targets = torch.Tensor([x.target for x in data_train[500:]])
+    logits = classifier(prompts, responses)
+    
+    y_pred_all = np.array(logits.detach().cpu())
+    metrics.calculate_metrics(targets, y_pred_all)
+    metrics.save_model(classifier, "_")
     
 
 if __name__ == '__main__':

@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-from transformers import BertTokenizer
 from torchvision import transforms
 import os
 from PIL import Image
@@ -38,10 +37,12 @@ class image():
         
 
 class complete_data():
-    def __init__(self, image, prompt_response):
-        self.text = prompt_response.text
-        self.mask = prompt_response.mask
-        self.target = prompt_response.target
+    def __init__(self, image, text):
+        # self.text = prompt_response.text
+        # self.mask = prompt_response.mask
+        self.prompt = text.prompt
+        self.response = text.response
+        self.target = text.target
         self.pixels = image.pixels
     def add_image_encodings(self, VT_outputs, VT_attention_mask):
         self.image = VT_outputs
@@ -280,14 +281,15 @@ def encode_dataset(tokenizer, text_data, image_data):
 
 def encode_data(tokenizer, data, MAX_LEN):
     input_ids, attention_mask = [], []
-    input = data.prompt + data.response
-    encoding = tokenizer(input, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
-    if len(encoding["input_ids"]) > 256:
-        input_ids.append(encoding["input_ids"][:256])
-        attention_mask.append(encoding["attention_mask"][:256])
+    prompt_encoding = tokenizer(data.prompt, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
+    response_encoding = tokenizer(data.response, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
+    input_ids = torch.cat(prompt_encoding, response_encoding)
+    if len(prompt_encoding["input_ids"]) > 256:
+        input_ids.append(prompt_encoding["input_ids"][:256])
+        attention_mask.append(prompt_encoding["attention_mask"][:256])
     else:
-        input_ids.append(encoding["input_ids"])
-        attention_mask.append(encoding["attention_mask"])
+        input_ids.append(prompt_encoding["input_ids"])
+        attention_mask.append(prompt_encoding["attention_mask"])
     return input_ids, attention_mask
 
 
@@ -298,14 +300,8 @@ def remove_mismatching_prompts(image_list, text_data):
         It checks to ensure that both image and text is complete
     """    
     data_train = []
-    temp_im_list, temp_prompt_list, temp_response_list = [], [], []
-    temp_targets_list = []
     for image, text in zip(image_list, text_data):
         if image.pixels != None and text.text != None:
-            temp_targets_list.append(str(text.target))
-            temp_im_list.append(image.id)
-            temp_prompt_list.append(text.prompt)
-            temp_response_list.append(text.response)
             data_train.append(complete_data(image, text))
             
     return data_train

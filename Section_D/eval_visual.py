@@ -2,12 +2,8 @@ import argparse
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler
 import numpy as np
-import matplotlib.pyplot as plt
-import datetime
-from sklearn.metrics import precision_recall_curve
 import preprocess_data, load_models
 import torch.nn as nn
-import torch.nn.functional as F
 from transformers import BertTokenizer 
 import metrics
 
