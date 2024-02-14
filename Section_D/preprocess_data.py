@@ -32,7 +32,7 @@ class image():
         self.pixels = None
     def add_image(self, preprocessed_image):
         self.image = preprocessed_image
-    def add_encodings(self, pixel_values):
+    def add_pixels(self, pixel_values):
         self.pixels = pixel_values
         
 
@@ -43,7 +43,7 @@ class complete_data():
         self.prompt = text.prompt
         self.response = text.response
         self.target = text.target
-        self.pixels = image.pixels
+        self.image = image.pixels
     def add_image_encodings(self, VT_outputs, VT_attention_mask):
         self.image = VT_outputs
         self.image_mask = VT_attention_mask
@@ -226,9 +226,9 @@ def permute_data(text_data, topics, args):
 
 
 
-def encode_images(image_data, feature_extractor):
+def apply_image_processor(image_data, feature_extractor):
     """
-        Takes in an array of images and processes them using a pretrained image processor.
+        Takes in an array of image objects and processes them using a pretrained image processor.
         Reduces the time by storing computed values in a dictionary and reusing them.
         Sets the corresponding class attributes to the new values.
     """
@@ -240,11 +240,11 @@ def encode_images(image_data, feature_extractor):
         # Check that there is an image
         if image.image != None:
             if image.image in image_dict.keys():
-                image.add_encodings((image_dict[image.image]).cpu())
+                image.add_pixels((image_dict[image.image]).cpu())
             else:
                 inputs = feature_extractor(image.image, return_tensors="pt", do_rescale=True).to(device)
                 pixel_values = (inputs.pixel_values).cpu()
-                image.add_encodings(pixel_values)
+                image.add_pixels(pixel_values)
                 
                 # Add entry to image_dict
                 image_dict[image.image] = pixel_values
@@ -301,7 +301,7 @@ def remove_mismatching_prompts(image_list, text_data):
     """    
     data_train = []
     for image, text in zip(image_list, text_data):
-        if image.pixels != None and text.text != None:
+        if image.pixels != None and text.prompt != None:
             data_train.append(complete_data(image, text))
             
     return data_train

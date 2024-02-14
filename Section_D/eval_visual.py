@@ -153,7 +153,7 @@ def main():
     image_data = preprocess_data.load_images(image_data, args)   
     tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
     text_data, image_list = preprocess_data.encode_dataset(tokenizer, text_data, image_data)
-    image_list = preprocess_data.encode_images(image_list, feature_extractor)
+    image_list = preprocess_data.apply_image_processor(image_list, feature_extractor)
     data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
     
     

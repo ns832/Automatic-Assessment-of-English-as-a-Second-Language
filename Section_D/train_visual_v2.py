@@ -32,7 +32,7 @@ parser.add_argument('--learning_rate', type=float, default=1e-3, help='Specify t
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
 parser.add_argument('--lr_decay', type=float, default=0.85, help='Specify the learning rate decay rate')
 parser.add_argument('--dropout', type=float, default=0.1, help='Specify the dropout rate')
-parser.add_argument('--n_epochs', type=int, default=5, help='Specify the number of epochs to train for')
+parser.add_argument('--n_epochs', type=int, default=1, help='Specify the number of epochs to train for')
 
 
 # Global Variables
@@ -67,10 +67,13 @@ class Combined_Model(nn.Module):
     def forward(self, prompt, response, image):
         prompt_embedding = self.text_embedder.encode(prompt)
         response_embedding = self.text_embedder.encode(response)
+        
         text_embedding = np.concatenate((prompt_embedding, response_embedding), axis=1)
-        text_embedding = torch.Tensor(text_embedding)
-        image_embedding = self.image_embedder(image)
-        combined_embedding = torch.cat(text_embedding, image_embedding)        
+        text_embedding = torch.Tensor(text_embedding).to(device)
+        
+        image_embedding = self.image_embedder(image.to(device))
+        image_CLS_token = image_embedding.last_hidden_state[:,0,:]
+        combined_embedding = torch.cat((text_embedding, image_CLS_token), dim=1)        
         logits = self.linear_head(combined_embedding)
         return logits
 
@@ -87,17 +90,19 @@ class LinearHead(nn.Module):
         return x
     
     
+    
+    
 def encode_dataset(text_data, image_data):
     """
-        Encodes the entire text data by calling the function encode_data().
         Adds the corresponding images to a list
     """
     
     # Encode the prompts/responses and save the attention masks, padding applied to the end
     image_list = []
     index_to_remove = []
+    
+    # Find the corresponding image so that later they can be concatenated together
     for data in text_data:
-        # Find the corresponding image so that later they can be concatenated together
         image = preprocess_data.find_corresponding_image_id(data.prompt, image_data)[1]
         if image in image_data: image_list.append(image)
         else: index_to_remove.append(text_data.index(data))
@@ -126,8 +131,8 @@ def train_classifier(args, train_dataloader, classifier):
             classifier.zero_grad()
             prompts_batch = batch['prompt']
             responses_batch = batch['response']
-            image_batch = batch['image']
-            targets_batch = batch['target'].float()
+            image_batch = batch['image'].squeeze()
+            targets_batch = batch['target'].float().to(device)
             
             logits = classifier(prompts_batch, responses_batch, image_batch).squeeze(dim=1)
             loss = criterion(logits, targets_batch)
@@ -147,11 +152,13 @@ def main(num_labels=1):
     # Load Models and Optimisers
     text_embedder = SentenceTransformer('sentence-transformers/sentence-t5-base').to(device)
     image_embedder, image_processor = load_models.load_vision_transformer_model()
-    input_size = getattr(text_embedder[2], 'out_features') * 2 # Since we are handling the prompts separately to the responses
+    text_input_size = getattr(text_embedder[2], 'out_features') * 2 # Since we are handling the prompts separately to the responses
+    image_input_size = getattr(image_embedder.pooler.dense, 'out_features') 
 
     # Instantiate Model
-    linear_head = LinearHead(input_size=(input_size), output_size=num_labels)
+    linear_head = LinearHead(input_size=(text_input_size + image_input_size), output_size=num_labels)
     classifier = Combined_Model(text_embedder, image_embedder, linear_head)
+    classifier.to(device)
     
     # Freeze all parameters except for linear layer
     classifier.train()
@@ -173,11 +180,8 @@ def main(num_labels=1):
     # Preprocess visual data
     image_data = preprocess_data.load_images(image_data, args)  
     text_data, image_list = encode_dataset( text_data, image_data)
-    image_list = preprocess_data.encode_images(image_list, image_processor)
-    print(len(text_data))
+    image_list = preprocess_data.apply_image_processor(image_list, image_processor)
     data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
-    print(len(data_train))
-    print(data_train[0].prompt)
     
     # Create dataloader
     # data_train = np.array([x for x in text_data])
@@ -187,16 +191,18 @@ def main(num_labels=1):
     classifier = train_classifier(args, train_dataloader, classifier)
 
 
-    # Eval on Test
-    prompts = [x.prompt for x in data_train]
-    responses = [x.response for x in data_train]
-    targets = torch.Tensor([x.target for x in data_train])
-    images = torch.Tensor([x.image for x in data_train])
-    print(len(prompts), len(responses), len(images))
-    logits = classifier(prompts, responses, images)
-    y_pred_all = np.array(logits.detach().cpu())
-    metrics.calculate_metrics(targets, y_pred_all)
-    metrics.save_model(classifier, "_")
+    # Eval on Test    
+    eval_dataloader = DataLoader(train_data, batch_size=len(train_data))
+    for batch in eval_dataloader:
+        prompts_batch = batch['prompt']
+        responses_batch = batch['response']
+        image_batch = batch['image'].squeeze()
+        targets_batch = batch['target'].float().to(device)
+    
+        logits = classifier(prompts_batch, responses_batch, image_batch)
+        y_pred_all = np.array(logits.detach().cpu())
+        metrics.calculate_metrics(targets_batch, y_pred_all)
+        metrics.save_model(classifier, "_")
     
     
 
