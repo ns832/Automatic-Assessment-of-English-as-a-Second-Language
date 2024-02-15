@@ -117,7 +117,8 @@ def load_images(image_data, args):
     # Iterate through the ids, find the file and preprocess them
     for image in image_data:
         # Check the image path exists (some have scripts but no images)
-        image_path = os.path.join(args.images_path, (image.id).upper() + ".png")
+        if "_" in image.id: image.id = image.id.lower()
+        image_path = os.path.join(args.images_path, image.id + ".png")
         if os.path.isfile(image_path):
             im = Image.open(image_path).convert("RGB")
             
@@ -127,7 +128,6 @@ def load_images(image_data, args):
             image.add_image(preprocessed_image)
         else:
             image_data.remove(image)
-            
     return image_data
 
 

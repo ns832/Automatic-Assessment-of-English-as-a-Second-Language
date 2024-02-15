@@ -85,7 +85,7 @@ class LinearHead(nn.Module):
         self.linear = nn.Linear(input_size, output_size)
 
     def forward(self, x):
-        # x = self.dropout(x)
+        x = self.dropout(x)
         x = self.linear(x)
         return x
     
@@ -127,7 +127,7 @@ def train_classifier(args, train_dataloader, classifier):
         print("Epoch: ", epoch, " of ", args.n_epochs)
         classifier.train()
         
-        for batch in train_dataloader:
+        for i,batch in enumerate(train_dataloader):
             classifier.zero_grad()
             prompts_batch = batch['prompt']
             responses_batch = batch['response']
@@ -136,7 +136,7 @@ def train_classifier(args, train_dataloader, classifier):
             
             logits = classifier(prompts_batch, responses_batch, image_batch).squeeze(dim=1)
             loss = criterion(logits, targets_batch)
-            print("Loss: ", loss.item())
+            print(i, " of ", len(train_dataloader))
             loss.backward()
 
             optimizer.step()
@@ -170,25 +170,27 @@ def main(num_labels=1):
     
     # Load data from files
     text_data, image_data, topics = preprocess_data.load_dataset(args)
-    text_data = preprocess_data.remove_incomplete_data(text_data[:500], image_data)
-    
+    text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
+    print(len(text_data))
     # Shuffling real data to create synthetic
     text_data = [x for x in text_data if x.target == 1]
     text_data = preprocess_data.permute_data(text_data, topics, args)
     np.random.shuffle(text_data)
+    print(len(text_data))
     
     # Preprocess visual data
     image_data = preprocess_data.load_images(image_data, args)  
-    text_data, image_list = encode_dataset( text_data, image_data)
+    text_data, image_list = encode_dataset(text_data, image_data)
     image_list = preprocess_data.apply_image_processor(image_list, image_processor)
-    data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
+    data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)[:500]
+    print(len(data_train))
     
     # Create dataloader
-    # data_train = np.array([x for x in text_data])
     train_data = CustomDataset(data_train)
     train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
     
     classifier = train_classifier(args, train_dataloader, classifier)
+    metrics.save_model(classifier, "_")
 
 
     # Eval on Test    
