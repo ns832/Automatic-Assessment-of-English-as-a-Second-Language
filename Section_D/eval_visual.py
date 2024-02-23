@@ -1,11 +1,13 @@
 import argparse
 import torch
-from torch.utils.data import TensorDataset, DataLoader, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, Dataset
 import numpy as np
 import preprocess_data, load_models
+from transformers import get_linear_schedule_with_warmup
 import torch.nn as nn
-from transformers import BertTokenizer 
+import torch.optim as optim
 import metrics
+from sentence_transformers import SentenceTransformer
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--folder_path', type=str, default=None, help='Load path of the folder containing prompts, responses etc.')
@@ -22,155 +24,162 @@ parser.add_argument('--images_path', type=str, help='Load path of image training
 parser.add_argument('--image_ids_path', type=str, help='Load path of image ids')
 parser.add_argument('--image_prompts_path', type=str, help='Load path of prompts corresponding to image ids')
 
-parser.add_argument('--model_path', type=str, default="/scratches/dialfs/alta/relevance/ns832/results/train_model_unseen/bert_model_0.14654680755471014.pt")
-parser.add_argument('--classification_model_path', type=str, help='Load path to trained classification head')
+parser.add_argument('--classification_model_path', type=str)
 
 parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
-parser.add_argument('--batch_size', type=int, default=100, help='Specify the test batch size')
-parser.add_argument('--learning_rate', type=float, default=1e-5, help='Specify the initial learning rate')
+parser.add_argument('--batch_size', type=int, default=12, help='Specify the test batch size')
+parser.add_argument('--learning_rate', type=float, default=1e-3, help='Specify the initial learning rate')
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
 parser.add_argument('--lr_decay', type=float, default=0.85, help='Specify the learning rate decay rate')
 parser.add_argument('--dropout', type=float, default=0.1, help='Specify the dropout rate')
 parser.add_argument('--n_epochs', type=int, default=1, help='Specify the number of epochs to train for')
 
 
-
-
 # Global Variables
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
 args = parser.parse_args()
-       
-    
 
-def create_dataset(data_train):
+class CustomDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+        
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        item = self.data[index]
+        return {
+            'prompt': item.prompt,
+            'response': item.response,
+            'image': item.image,
+            'target': item.target
+        }
+    
+    
+class Combined_Model(nn.Module):
+    def __init__(self, text_embedder, image_embedder, linear_head):
+        super(Combined_Model, self).__init__()
+        self.text_embedder = text_embedder
+        self.image_embedder = image_embedder
+        self.linear_head = linear_head
+        
+    def forward(self, prompt, response, image):
+        prompt_embedding = self.text_embedder.encode(prompt)
+        response_embedding = self.text_embedder.encode(response)
+        
+        text_embedding = np.concatenate((prompt_embedding, response_embedding), axis=1)
+        text_embedding = torch.Tensor(text_embedding).to(device)
+        
+        # image_embedding = self.image_embedder(image.to(device))
+        # image_CLS_token = image_embedding.last_hidden_state[:,0,:]
+        # combined_embedding = torch.cat((text_embedding, image_CLS_token), dim=1)        
+        logits = self.linear_head(text_embedding)
+        return logits
+
+
+class LinearHead(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(LinearHead, self).__init__()
+        self.dropout = nn.Dropout(p=0.1)
+        self.linear = nn.Linear(input_size, output_size)
+
+    def forward(self, x):
+        x = self.dropout(x)
+        x = self.linear(x)
+        return x
+    
+    
+    
+    
+def encode_dataset(text_data, image_data):
     """
-        Takes in data_train that is a class which include the prompts, responses, images etc.
-        It extracts the different elements and turns them into torch tensors, concatenating the 
-        encoded text with the encoded image, and concatenating their attention masks
-        
-        Then takes these along with the targets to create a dataset and then dataloader
+        Adds the corresponding images to a list
     """
-    # Extract the different elements and convert them to numpy array to make the conversion to torch tensors easier
-    encoded_texts = np.array([x.text for x in data_train])
-    mask = np.array([x.mask for x in data_train])
-    targets = np.array([x.target for x in data_train])
     
-    # Turn into torch tensor and send to cuda, squeezing the dimensions down to 2 dims for all
-    encoded_texts = torch.tensor(encoded_texts).to(device).squeeze()
-    mask = torch.tensor(mask).to(device).squeeze()
-    targets = torch.tensor(targets).to(device)
+    # Encode the prompts/responses and save the attention masks, padding applied to the end
+    image_list = []
+    index_to_remove = []
     
-    train_data = TensorDataset(encoded_texts, mask, targets)
-    # train_sampler = RandomSampler(train_data)
-    train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
-    
-    return train_dataloader, targets
+    # Find the corresponding image so that later they can be concatenated together
+    for data in text_data:
+        image = preprocess_data.find_corresponding_image_id(data.prompt, image_data)[1]
+        if image in image_data: image_list.append(image)
+        else: index_to_remove.append(text_data.index(data))
+            
+    for index in list(reversed(index_to_remove)):
+        text_data.pop(index)
+    return text_data, image_list
 
 
-def get_hidden_state(model, device, dataloader):
-
-    model.eval()    
-    print("Started evaluation")
-    CLS_tokens = torch.empty((0, 512), dtype=torch.float32)
-    for batch in dataloader:
+def eval_classifier(args, eval_dataloader, classifier):
+    y_pred_list, targets = [], []  
+    for epoch in range(args.n_epochs):
+        print("Epoch: ", epoch, " of ", args.n_epochs)
         
-        input_batch = (batch[0].to(device)).squeeze(1)
-        input_mask_batch = (batch[1].to(device)).squeeze(1)
-        target_batch = batch[2].to(device) 
+        for i,batch in enumerate(eval_dataloader):
+            if i%25 == 0 :print(i, " of ", len(eval_dataloader))
+            classifier.zero_grad()
+            prompts_batch = batch['prompt']
+            responses_batch = batch['response']
+            image_batch = batch['image'].squeeze()
+            targets_batch = batch['target'].float().to(device)
+            
+            logits = classifier(prompts_batch, responses_batch, image_batch).squeeze(dim=1)
+            
+            y_pred_list += logits.cpu().detach().numpy().tolist()
+            targets += targets_batch.cpu().detach().numpy().tolist()
 
-        with torch.no_grad():
-            BERT_outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=target_batch, output_hidden_states = True)
-
-        last_hidden_states = BERT_outputs.hidden_states[-1].detach().cpu()
-        CLS_tokens_batch = last_hidden_states[:,0,:]
-        CLS_tokens = torch.cat((CLS_tokens, CLS_tokens_batch), dim=0)
-        
-    return CLS_tokens
-
-
-def get_hidden_state_image(data_train, visual_model):
-    pixels = np.array([x.pixels for x in data_train])
-    pixels = torch.tensor(pixels).to(device).squeeze()
-    
-    with torch.no_grad():
-        outputs = visual_model(pixels) 
-        last_hidden_state = outputs.hidden_states[-1].detach().cpu()
-        CLS_tokens = last_hidden_state[:,0,:]
-        
-    return CLS_tokens
-
-# def get_hidden_state(model, visual_model, device, eval_dataloader):
-
-#     model.eval()    
-#     print("Started evaluation")
-    
-#     concatenated_outputs = []
-#     for batch in eval_dataloader:
-        
-#         input_batch = (batch[0].to(device)).squeeze(1)
-#         input_mask_batch = (batch[1].to(device)).squeeze(1)
-#         target_batch = batch[2].to(device) 
-#         pixels = batch[3].to(device)
-
-#         with torch.no_grad():
-#             BERT_outputs = model(input_ids=input_batch, attention_mask=input_mask_batch, labels=target_batch)
-#             VT_outputs = visual_model(pixels) 
-        
-#         BERT_hidden_state = torch.tensor(BERT_outputs.hidden_states[-1])
-#         VT_hidden_state = torch.tensor((VT_outputs.hidden_states[-1])[:, :, :BERT_hidden_state.shape[2]])
-#         concatenated_outputs.append(torch.cat((VT_hidden_state.cpu(), BERT_hidden_state.cpu()), dim=1))
-
-#     concatenated_outputs = torch.cat(concatenated_outputs, dim=0).squeeze()
-    # return concatenated_outputs
+    targets = np.array(targets)
+    y_pred_list = np.array(y_pred_list)
+    metrics.calculate_metrics(targets, y_pred_list)
 
 
-def load_classification_head(hidden_states, num_labels=1):
-    classifier = nn.Linear(hidden_states.shape[1], num_labels)
+def load_classification_head(input_size, output_size, text_embedder, image_embedder):
+    linear_head = LinearHead(input_size=input_size, output_size=output_size)
+    classifier = Combined_Model(text_embedder, image_embedder, linear_head)
     classifier.load_state_dict(torch.load(args.classification_model_path))
     classifier.eval()
+    classifier.to(device)
     return classifier
 
 
-def main():    
-    bert_base_uncased = "prajjwal1/bert-small"
+def main(num_labels=1):
     preprocess_data.set_seed(args)
     
     # Load Models and Optimisers
-    visual_model, feature_extractor = load_models.load_vision_transformer_model()
-    BERT_model = load_models.load_trained_BERT_model(args)
-    
-    # Preprocess textual data
+    text_embedder = SentenceTransformer('sentence-transformers/sentence-t5-base').to(device)
+    image_embedder, image_processor = load_models.load_vision_transformer_model()
+    text_input_size = getattr(text_embedder[2], 'out_features') * 2 # Since we are handling the prompts separately to the responses
+    # image_input_size = getattr(image_embedder.pooler.dense, 'out_features') 
+    image_input_size = 0
+
+    # Instantiate Model
+    classifier = load_classification_head(input_size=(text_input_size + image_input_size), output_size=num_labels, text_embedder=text_embedder, image_embedder=image_embedder)
+
+    # Load data from files
     text_data, image_data, topics = preprocess_data.load_dataset(args)
     text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
-    
-    # print("Shuffling real data to create synthetic")
-    text_data = [x for x in text_data if x.target == 1]
-    text_data = preprocess_data.permute_data(text_data[:500], topics, args)
-    np.random.shuffle(text_data)
-    
+          
+    if args.labels_path == None:
+        # Shuffling real data to create synthetic
+        text_data = [x for x in text_data if x.target == 1]
+        text_data = preprocess_data.permute_data(text_data, topics, args)
+        np.random.shuffle(text_data)
+
     # Preprocess visual data
-    image_data = preprocess_data.load_images(image_data, args)   
-    tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
-    text_data, image_list = preprocess_data.encode_dataset(tokenizer, text_data, image_data)
-    image_list = preprocess_data.apply_image_processor(image_list, feature_extractor)
-    data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
+    image_data = preprocess_data.load_images(image_data, args)  
+    text_data, image_list = encode_dataset( text_data, image_data)
+    image_list = preprocess_data.apply_image_processor(image_list, image_processor)
+    data_eval = preprocess_data.remove_mismatching_prompts(image_list, text_data)
+    
+    # Create dataloader
+    eval_data = CustomDataset(data_eval)
+    eval_dataloader = DataLoader(eval_data, batch_size=args.batch_size)
+
+    eval_classifier(args, eval_dataloader, classifier)
     
     
-    # Create dataloader with the text data
-    dataloader, targets = create_dataset(data_train)
-    print("Dataset Size: ", len(data_train))
-    
-    # Obtain hidden states for VT and BERT
-    BERT_CLS_tokens = get_hidden_state(BERT_model, device, dataloader)
-    VT_CLS_tokens = get_hidden_state_image(data_train, visual_model)
-    hidden_state = torch.cat((VT_CLS_tokens.cpu(), BERT_CLS_tokens.cpu()), dim=1)
-    
-    classification_head = load_classification_head(hidden_state)
-    results = classification_head(hidden_state)
-    y_pred_all = np.array(results.detach())
-    targets = np.array([x.target for x in data_train])
-    metrics.calculate_metrics(targets, y_pred_all)
 
 if __name__ == '__main__':
     if args.folder_path:

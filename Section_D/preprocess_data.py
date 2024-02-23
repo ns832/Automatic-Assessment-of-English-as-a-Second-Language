@@ -12,10 +12,9 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 class text():
-    def __init__(self, prompt, prompt_id, response, target):
+    def __init__(self, prompt, response, target):
         self.prompt = prompt
         self.response = response
-        self.id = prompt_id
         self.target = target
         self.text = None
         self.mask = None
@@ -114,10 +113,21 @@ def load_images(image_data, args):
         # transforms.RandomRotation(degrees=(30, 70)) ##
     ])
     
-    # Iterate through the ids, find the file and preprocess them
+    # Iterate through the ids, find the file and preprocess them. Change upper/lower as required
+    print(image_data[0].id)
+    user_input = input("These is an example of the file names to be searched, if they require to be changed to all upper-case/lower-case type \'upper\' or \'lower\', else press enter:").lower()
+    if user_input == 'upper':
+        for x in image_data:
+            x.id = x.id.upper()
+        # image_data = [x.id.upper() for x in image_data]
+        print(image_data[0].id)
+    if user_input == 'lower': 
+        for x in image_data:
+            x.id = x.id.lower()
+        print(image_data[0].id)
+        
     for image in image_data:
         # Check the image path exists (some have scripts but no images)
-        if "_" in image.id: image.id = image.id.lower()
         image_path = os.path.join(args.images_path, image.id + ".png")
         if os.path.isfile(image_path):
             im = Image.open(image_path).convert("RGB")
@@ -130,8 +140,8 @@ def load_images(image_data, args):
             image_data.remove(image)
     return image_data
 
-
-
+        
+    
 def load_dataset(args, images = True):
     """
         Takes in the different file paths and extracts the data from them.
@@ -143,32 +153,29 @@ def load_dataset(args, images = True):
         
         All textual data is assigned a target of '1' if no targets are given.
     """
+    
+    # Create two datasets, using the custom classes defined
+    text_data, image_data = [], []
+    
      # First load the tokenizer and initialize empty arrays for your encoded inputs and masks    
     with open(args.resps_path) as f0, open(args.prompts_path) as f1, open(args.topics_path) as f2:
         
         # Stripping the arrays to match the formating 
         responses, prompts, topics = f0.readlines(), f1.readlines(), f2.readlines()
-        prompts = [x.strip().lower() for x in prompts]
         responses = [x.strip().lower() for x in responses]
+        prompts = [x.strip().lower() for x in prompts]
         topics = [x.strip().lower() for x in topics]
+            
+        # Optional labels dealt with, else target 1 is assigned to be permuted later
+        if args.labels_path:
+            targets = np.loadtxt(args.labels_path, dtype=int)
+        else: targets = [1 for x in prompts]
         
-    # Create two datasets, using the custom classes defined
-    text_data, image_data = [], []
-    
-    # Optional prompt ids dealt with
-    if args.prompt_ids_path: 
-        prompt_ids = [x.strip().lower() for x in open(args.prompt_ids_path).readlines()]
-    else: prompt_ids = [None for x in prompts]
+    for prompt, response, target in zip(prompts, responses, targets):
+        text_data.append(text(prompt, response, target))
         
-    # Optional labels dealt with
-    if args.labels_path: 
-        targets = np.loadtxt(args.labels_path, dtype=int)
-        off_targets = [x for x in targets if x == 0]
-        print("Dataset size: ", len(targets) , "Proportions: ", len(off_targets) / len(targets))
-    else: targets = [1 for x in prompts]
-        
-    for prompt, prompt_id, response, target in zip(prompts, prompt_ids, responses, targets):
-        text_data.append(text(prompt, prompt_id, response, target))
+    # Data permuted if there are no labels
+    if not args.labels_path: permute_data(text_data, topics, args)
         
     if images:
         with open(args.image_ids_path) as f3, open(args.image_prompts_path) as f4:
@@ -179,7 +186,6 @@ def load_dataset(args, images = True):
         for image_id, image_prompt in zip(image_ids, image_prompts):
             image_data.append(image(image_id, image_prompt))
             
-    print("Dataset Loaded: ", len(text_data))
     return text_data, image_data, topics
 
 
@@ -192,6 +198,7 @@ def remove_incomplete_data(text_data, image_data):
     for data in text_data:
         if (find_corresponding_image_id(data.prompt, image_data)[0]) == False:
             text_data.remove(data)
+            print("Prompt not found: ", data.prompt)
             
     return text_data
 
@@ -204,6 +211,14 @@ def permute_data(text_data, topics, args):
         Then the code checks that the topic is different to the original topic, and concatenates it to the existing data.
         Sets the new target to 0 instead of 1 to designate it as off-topic
     """
+    # Make sure there are prompt ids 
+    if args.prompt_ids_path: 
+        prompt_ids = open(args.prompt_ids_path).readlines()
+        prompt_ids = [x.strip().lower() for x in prompt_ids]
+        assert(len(prompt_ids) == len(text_data))
+    elif not args.labels_path:
+        raise Exception("No prompt ids identified, permuting not possible.")
+    
     # Dynamic shuffling in order to generate off-topic samples, based on prompt probability dist.
     unique_prompts_distribution_path = args.topic_dist_path 
     prompt_distribution = np.loadtxt(unique_prompts_distribution_path, dtype=np.int32)
@@ -214,12 +229,12 @@ def permute_data(text_data, topics, args):
     val = int(len(text_data))
     new_prompt_ids = np.random.choice(number_of_questions, val, p=prompt_distribution)
     for i in range(val):
-        while (new_prompt_ids[i] == text_data[i].id):
+        while (new_prompt_ids[i] == prompt_ids[i]):
             new_prompt_ids[i] = np.random.choice(number_of_questions, 1, p=prompt_distribution)
     
     # Append to the list new prompt_response objects that have the same order of responses as the original text_data, but have shuffled prompts/ids
-    for prompt_id, data in zip(new_prompt_ids, text_data):
-        text_data.append(text(topics[int(prompt_id)], prompt_id, data.response, 0))
+    for new_prompt_id, data in zip(new_prompt_ids, text_data):
+        text_data.append(text(topics[int(new_prompt_id)], data.response, 0))
         
     print("Data Permuted")
     return text_data
@@ -278,19 +293,33 @@ def encode_dataset(tokenizer, text_data, image_data):
     return text_data, image_list
 
 
-
 def encode_data(tokenizer, data, MAX_LEN):
     input_ids, attention_mask = [], []
-    prompt_encoding = tokenizer(data.prompt, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
-    response_encoding = tokenizer(data.response, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
-    input_ids = torch.cat(prompt_encoding, response_encoding)
-    if len(prompt_encoding["input_ids"]) > 256:
-        input_ids.append(prompt_encoding["input_ids"][:256])
-        attention_mask.append(prompt_encoding["attention_mask"][:256])
+    input = data.prompt + data.response
+    encoding = tokenizer(input, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
+    
+    if len(encoding["input_ids"]) > 256:
+        input_ids.append(torch.Tensor(encoding["input_ids"][:256]))
+        attention_mask.append(torch.Tensor(encoding["attention_mask"][:256]))
     else:
-        input_ids.append(prompt_encoding["input_ids"])
-        attention_mask.append(prompt_encoding["attention_mask"])
+        input_ids.append(torch.Tensor(encoding["input_ids"]))
+        attention_mask.append(torch.Tensor(encoding["attention_mask"]))
     return input_ids, attention_mask
+
+# def encode_data(tokenizer, data, MAX_LEN):
+#     input_ids, attention_mask = [], []
+#     prompt_encoding = tokenizer(data.prompt, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
+#     response_encoding = tokenizer(data.response, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
+#     text_embedding = torch.Tensor(np.concatenate((prompt_encoding["input_ids"], response_encoding["input_ids"]), axis=0))
+#     text_embedding_mask = torch.Tensor(np.concatenate((prompt_encoding["attention_mask"], response_encoding["attention_mask"]), axis=0))
+#     # input_ids = torch.cat((prompt_encoding, response_encoding))
+#     if len(prompt_encoding["input_ids"]) > 256:
+#         input_ids.append(text_embedding[:256])
+#         attention_mask.append(text_embedding_mask[:256])
+#     else:
+#         input_ids.append(text_embedding)
+#         attention_mask.append(text_embedding_mask)
+#     return input_ids, attention_mask
 
 
 
@@ -303,6 +332,7 @@ def remove_mismatching_prompts(image_list, text_data):
     for image, text in zip(image_list, text_data):
         if image.pixels != None and text.prompt != None:
             data_train.append(complete_data(image, text))
-            
+        # elif text.prompt != None: print(text.prompt)
+        # else: print("Prompt missing")
     return data_train
 

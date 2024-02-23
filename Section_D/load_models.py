@@ -17,7 +17,7 @@ def load_vision_transformer_model():
         "google/vit-base-patch16-224",
         output_hidden_states = True
         )
-    model.to(device)
+    # model.to(device)
     return model, image_processor
 
 

@@ -16,6 +16,8 @@ def multiplots(predictions_list, targets_list, keys_list):
     ax.set_ylabel('Precision')
     ax.set_xlabel('Recall')
     for predictions, targets, key in zip(predictions_list, targets_list, keys_list):
+        targets = 1.-targets
+        predictions = 1.-predictions
         PrecisionRecallDisplay.from_predictions(targets, predictions, ax=ax, name=key, drawstyle="default", pos_label=0)
     ax.legend()
     save_image_prompt(" ", fig)
@@ -74,8 +76,8 @@ def calculate_metrics(targets, y_pred_all):
     targets, y_pred = torch.tensor(targets, device = 'cpu'), torch.tensor(y_pred, device = 'cpu')
     precision, recall, _ = precision_recall_curve(targets, y_pred)
     
-    print("Precision:", precision)
-    print("Recall:", recall)
+    # print("Precision:", precision)
+    # print("Recall:", recall)
     
     # Create precision recall curve
     fig, ax = plt.subplots()
@@ -92,8 +94,9 @@ def calculate_metrics(targets, y_pred_all):
             
     f_score = np.amax( (1.+0.5**2) * ( (precision * recall) / (0.5**2 * precision + recall) ) )
     print("F0.5 score is:", f_score)
-    save_image_prompt(f_score, fig)
-    save_predictions_prompt(f_score, targets, y_pred_all)
+    # save_image_prompt(f_score, fig)
+    # save_predictions_prompt(f_score, targets, y_pred_all)
+    return f_score
     
 
 def save_image_prompt(f_score, fig):

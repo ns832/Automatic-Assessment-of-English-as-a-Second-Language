@@ -1,14 +1,13 @@
 import argparse
 import torch
-from torch.utils.data import TensorDataset, DataLoader, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, Dataset
 import numpy as np
 import preprocess_data, load_models
-from transformers import get_linear_schedule_with_warmup, BertTokenizer
-import torch.nn as nn, torch.nn.functional as F
+from transformers import get_linear_schedule_with_warmup
+import torch.nn as nn
 import torch.optim as optim
 import metrics
 from sentence_transformers import SentenceTransformer
-
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--folder_path', type=str, default=None, help='Load path of the folder containing prompts, responses etc.')
@@ -29,11 +28,9 @@ parser.add_argument('--model_path', type=str, default="/scratches/dialfs/alta/re
 
 parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
 parser.add_argument('--batch_size', type=int, default=12, help='Specify the test batch size')
-parser.add_argument('--learning_rate', type=float, default=5e-5, help='Specify the initial learning rate')
-parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
-parser.add_argument('--lr_decay', type=float, default=0.85, help='Specify the learning rate decay rate')
-parser.add_argument('--dropout', type=float, default=0.1, help='Specify the dropout rate')
+parser.add_argument('--learning_rate', type=float, default=1e-5, help='Specify the initial learning rate')
 parser.add_argument('--n_epochs', type=int, default=1, help='Specify the number of epochs to train for')
+
 
 
 # Global Variables
@@ -41,110 +38,56 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
 args = parser.parse_args()
 
-
-# def create_dataset(data_train):
-#     """
-#         Takes in data_train that is a class which include the prompts, responses, images etc.
-#         It extracts the different elements and turns them into torch tensors, concatenating the 
-#         encoded text with the encoded image, and concatenating their attention masks
+class CustomDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
         
-#         Then takes these along with the targets to create a dataset and then dataloader
-#     """
-#     # Extract the different elements and convert them to numpy array to make the conversion to torch tensors easier
-#     encoded_texts = np.array([x.text for x in data_train])
-#     mask = np.array([x.mask for x in data_train])
-#     targets = np.array([x.target for x in data_train])
-#     pixels = np.array([x.pixels for x in data_train])
-    
-#     # Turn into torch tensor and send to cuda, squeezing the dimensions down to 2 dims for all
-#     encoded_texts = torch.tensor(encoded_texts).to(device).squeeze()
-#     mask = torch.tensor(mask).to(device).squeeze()
-#     targets = torch.tensor(targets).to(device)
-#     pixels = torch.tensor(pixels).to(device).squeeze()
-    
-#     text_data = TensorDataset(encoded_texts, mask, targets)
-#     # train_sampler = RandomSampler(train_data)
-#     train_dataloader = DataLoader(text_data, batch_size=args.batch_size)
-#     image_dataloader = DataLoader(pixels, batch_size=args.batch_size)
-    
-#     return train_dataloader, image_dataloader, targets
+    def __len__(self):
+        return len(self.data)
 
-
-def add_word_embeddings(model, data_train):
+    def __getitem__(self, index):
+        item = self.data[index]
+        return {
+            'prompt': item.prompt,
+            'response': item.response,
+            'image': item.image,
+            'target': item.target
+        }
     
-    model.eval()
     
-    for data in data_train:
-        # Get prompt and response and their encoding
-        prompt, response = data.prompt, data.response
-        prompt_encoding = model.encode(prompt)
-        response_encoding = model.encode(response)
+class Combined_Model(nn.Module):
+    def __init__(self, text_embedder, image_embedder, linear_head):
+        super(Combined_Model, self).__init__()
+        self.text_embedder = text_embedder
+        self.image_embedder = image_embedder
+        self.linear_head = linear_head
         
-        combined_encoding = np.concatenate((prompt_encoding, response_encoding), axis=0)
-        data.add_encodings(combined_encoding,"")
-    
-    return data_train
-    
-
-def get_image_CLS_tokens( visual_model, dataloader):
-    
-    visual_model.eval()
-    CLS_tokens = torch.empty((0, 768), dtype=torch.float32)
-    for batch in dataloader:
-        pixels_batch = batch.to(device)
+    def forward(self, prompt, response, image):
+        prompt_embedding = self.text_embedder.encode(prompt)
+        response_embedding = self.text_embedder.encode(response)
         
-        with torch.no_grad():
-            outputs = visual_model(pixels_batch) 
-            
-        last_hidden_state = outputs.hidden_states[-1].detach().cpu()
-        CLS_tokens_batch = last_hidden_state[:,0,:]
-        CLS_tokens = torch.cat((CLS_tokens, CLS_tokens_batch), dim=0)
+        text_embedding = np.concatenate((prompt_embedding, response_embedding), axis=1)
+        text_embedding = torch.Tensor(text_embedding)
         
-    return CLS_tokens
+        image_embedding = self.image_embedder(image)
+        image_CLS_token = image_embedding.last_hidden_state[:,0,:]
+        combined_embedding = torch.cat((text_embedding, image_CLS_token), dim=1)     
+        logits = self.linear_head(combined_embedding)
+        return logits
 
 
+class LinearHead(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(LinearHead, self).__init__()
+        self.dropout = nn.Dropout(p=0.1)
+        self.linear = nn.Linear(input_size, output_size)
 
-
-
-def train_classification_head(args, train_dataloader, shape, num_labels=1):
-    classifier = nn.Sequential(
-        nn.Dropout(p=0.1),
-        nn.Linear(shape, num_labels)
-    )
-    classifier.to(device)    
-    criterion = nn.BCEWithLogitsLoss()
-
-    optimizer = optim.SGD(
-        classifier.parameters(),
-        # eps = args.adam_epsilon,
-        lr=args.learning_rate
-        )
-    # scheduler = get_linear_schedule_with_warmup(optimizer,
-    #                                             num_warmup_steps = 20,
-    #                                             num_training_steps = len(train_dataloader) * args.n_epochs)
+    def forward(self, x):
+        x = self.dropout(x)
+        x = self.linear(x)
+        return x
     
-    for epoch in range(args.n_epochs):
-        print("Epoch: ", epoch, " of ", args.n_epochs)
-        classifier.train()
-        
-        for batch in train_dataloader:
-            classifier.zero_grad()
-            # optimizer.zero_grad()
-            word_embedding = (batch[0].float()).to(device)
-            targets_batch = (batch[1].float()).to(device)
-            logits = classifier(word_embedding).squeeze(dim=1)
-            loss = criterion(logits, targets_batch)
-            loss.backward()
-            
-            optimizer.step()
-            # scheduler.step()
-            print("Loss: ", loss.item())
     
-    # train_BERT.plot_loss(args, loss_values, avg_train_loss)
-    return classifier
-
-    
-
 def encode_dataset(text_data, image_data):
     """
         Encodes the entire text data by calling the function encode_data().
@@ -164,48 +107,109 @@ def encode_dataset(text_data, image_data):
         text_data.pop(index)
     return text_data, image_list
 
-def main():    
+
+def train_classifier(args, train_dataloader, classifier):
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.SGD(
+        classifier.parameters(),
+        lr=args.learning_rate
+        )
+    scheduler = get_linear_schedule_with_warmup(optimizer,
+                                                num_warmup_steps = 100,
+                                                num_training_steps = len(train_dataloader) * args.n_epochs)
+    
+    
+    for epoch in range(args.n_epochs):
+        print("Epoch: ", epoch + 1, " of ", args.n_epochs)
+        classifier.train()
+        
+        for n,batch in enumerate(train_dataloader):
+            classifier.zero_grad()
+            prompts_batch = batch['prompt']
+            responses_batch = batch['response']
+            image_batch = batch['image'].squeeze()
+            targets_batch = batch['target'].float()
+            
+            logits = classifier(prompts_batch, responses_batch, image_batch).squeeze(dim=1)
+            loss = criterion(logits, targets_batch)
+            if n%25 == 0: print("Batch ", n + 1 , " of ", len(train_dataloader))
+            loss.backward()
+
+            optimizer.step()
+            scheduler.step()
+
+    return classifier
+
+
+
+def main(num_labels=1):
     preprocess_data.set_seed(args)
     
     # Load Models and Optimisers
     text_embedder = SentenceTransformer('sentence-transformers/sentence-t5-base').to(device)
-    visual_model, image_processor = load_models.load_vision_transformer_model()
+    image_embedder, image_processor = load_models.load_vision_transformer_model()
+    text_input_size = getattr(text_embedder[2], 'out_features') * 2 # Since we are handling the prompts separately to the responses
+    image_input_size = getattr(image_embedder.pooler.dense, 'out_features') 
+
+    # Instantiate Model
+    linear_head = LinearHead(input_size=(text_input_size + image_input_size), output_size=num_labels)
+    classifier = Combined_Model(text_embedder, image_embedder, linear_head)
     
-    # Preprocess textual data
+    # Freeze all parameters except for linear layer
+    classifier.train()
+    # for param in classifier.text_embedder.parameters():
+    #     param.requires_grad = False
+
+    for param in classifier.image_embedder.parameters():
+        param.requires_grad = False
+    
+    # Load data from files
     text_data, image_data, topics = preprocess_data.load_dataset(args)
-    # text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
-    
-    # Shuffling real data to create synthetic
-    text_data = [x for x in text_data if x.target == 1]
-    text_data = preprocess_data.permute_data(text_data, topics, args)
     np.random.shuffle(text_data)
+    text_data = preprocess_data.remove_incomplete_data(text_data[:5000], image_data)
+    
+    if args.labels_path == None:
+        # Shuffling real data to create synthetic
+        text_data = [x for x in text_data if x.target == 1]
+        text_data = preprocess_data.permute_data(text_data, topics, args)
+        np.random.shuffle(text_data)
     
     # Preprocess visual data
-    # image_data = preprocess_data.load_images(image_data, args)  
-    # text_data, image_list = encode_dataset( text_data[:100], image_data)
-    # image_list = preprocess_data.encode_images(image_list, image_processor)
-    # data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
-
-    data_train = np.array([x for x in text_data[:100]])
-    print("Dataset Size: ", len(data_train))
-
-    # Concatenate vision transformer and BERT hidden states
-    data_train = add_word_embeddings(text_embedder, data_train)
-    # VT_CLS_tokens = get_hidden_state_image(visual_model, image_dataloader)
+    image_data = preprocess_data.load_images(image_data, args)  
+    text_data, image_list = encode_dataset( text_data, image_data)
+    image_list = preprocess_data.apply_image_processor(image_list, image_processor)
+    data_train = preprocess_data.remove_mismatching_prompts(image_list, text_data)
     
-    targets = torch.Tensor([x.target for x in data_train])
-    text_encodings = torch.Tensor([x.text for x in data_train])
-    
-    train_data = TensorDataset(text_encodings, targets)
+    # Create dataloader
+    train_data = CustomDataset(data_train)
     train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
-    classifier = train_classification_head(args, train_dataloader, shape=text_encodings.shape[1])
+    
+    classifier = train_classifier(args, train_dataloader, classifier)
 
-  
-    # Eval on Test
-    logits = classifier((text_encodings[500:]).to(device))
-    y_pred_all = np.array(logits.detach().cpu())
-    metrics.calculate_metrics(targets[500:], y_pred_all)
+
+    # Eval on Test    
+    classifier.eval()
+    eval_data = CustomDataset(data_train[:500])
+    eval_dataloader = DataLoader(eval_data, batch_size=args.batch_size)
+    y_pred_list, targets = [], []  
+    
+    for batch in eval_dataloader:
+        prompts_batch = batch['prompt']
+        responses_batch = batch['response']
+        image_batch = batch['image'].squeeze()
+        targets_batch = batch['target'].float().to(device)
+    
+        logits = classifier(prompts_batch, responses_batch, image_batch).squeeze(dim=1)
+        
+        y_pred_list += logits.cpu().detach().numpy().tolist()
+        targets += targets_batch.cpu().detach().numpy().tolist()
+
+    targets = np.array(targets)
+    y_pred_list = np.array(y_pred_list)
+    metrics.calculate_metrics(targets, y_pred_list)
     metrics.save_model(classifier, "_")
+    
+    
     
 
 if __name__ == '__main__':

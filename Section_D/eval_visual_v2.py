@@ -71,10 +71,10 @@ class Combined_Model(nn.Module):
         text_embedding = np.concatenate((prompt_embedding, response_embedding), axis=1)
         text_embedding = torch.Tensor(text_embedding).to(device)
         
-        # image_embedding = self.image_embedder(image.to(device))
-        # image_CLS_token = image_embedding.last_hidden_state[:,0,:]
-        # combined_embedding = torch.cat((text_embedding, image_CLS_token), dim=1)        
-        logits = self.linear_head(text_embedding)
+        image_embedding = self.image_embedder(image.to(device))
+        image_CLS_token = image_embedding.last_hidden_state[:,0,:]
+        combined_embedding = torch.cat((text_embedding, image_CLS_token), dim=1)        
+        logits = self.linear_head(combined_embedding)
         return logits
 
 
@@ -161,10 +161,11 @@ def main(num_labels=1):
     text_data, image_data, topics = preprocess_data.load_dataset(args)
     text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
           
-    # Shuffling real data to create synthetic
-    text_data = [x for x in text_data if x.target == 1]
-    text_data = preprocess_data.permute_data(text_data, topics, args)
-    np.random.shuffle(text_data)
+    if args.labels_path == None:
+        # Shuffling real data to create synthetic
+        text_data = [x for x in text_data if x.target == 1]
+        text_data = preprocess_data.permute_data(text_data, topics, args)
+        np.random.shuffle(text_data)
 
     # Preprocess visual data
     image_data = preprocess_data.load_images(image_data, args)  
