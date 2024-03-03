@@ -109,8 +109,6 @@ def load_images(image_data, args):
         transforms.ToTensor(),
         transforms.RandomHorizontalFlip(p=0.5), 
         transforms.RandomVerticalFlip(p=0.5), 
-        # transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5)), ##
-        # transforms.RandomRotation(degrees=(30, 70)) ##
     ])
     
     # Iterate through the ids, find the file and preprocess them. Change upper/lower as required
@@ -158,12 +156,12 @@ def load_dataset(args, images = True):
     text_data, image_data = [], []
     
      # First load the tokenizer and initialize empty arrays for your encoded inputs and masks    
-    with open(args.resps_path) as f0, open(args.prompts_path) as f1, open(args.topics_path) as f2:
+    with open(args.responses_path) as f0, open(args.prompts_path) as f1, open(args.topics_path) as f2:
         
         # Stripping the arrays to match the formating 
         responses, prompts, topics = f0.readlines(), f1.readlines(), f2.readlines()
-        responses = [x.strip().lower() for x in responses]
-        prompts = [x.strip().lower() for x in prompts]
+        responses = [x.strip().lower() for x in responses[:-100]]
+        prompts = [x.strip().lower() for x in prompts[:-100]]
         topics = [x.strip().lower() for x in topics]
             
         # Optional labels dealt with, else target 1 is assigned to be permuted later
@@ -171,12 +169,14 @@ def load_dataset(args, images = True):
             targets = np.loadtxt(args.labels_path, dtype=int)
         else: targets = [1 for x in prompts]
         
+    # for prompt, response, target in zip(prompts[:5000], responses[:5000], targets[:5000]):
     for prompt, response, target in zip(prompts, responses, targets):
-        text_data.append(text(prompt, response, target))
+        data = text(prompt, response, target)
+        text_data.append(data)
         
     # Data permuted if there are no labels
-    if not args.labels_path: permute_data(text_data, topics, args)
-        
+    if not args.labels_path: text_data = permute_data(text_data, topics, args)
+    
     if images:
         with open(args.image_ids_path) as f3, open(args.image_prompts_path) as f4:
             image_ids, image_prompts = f3.readlines(), f4.readlines()
@@ -214,7 +214,7 @@ def permute_data(text_data, topics, args):
     # Make sure there are prompt ids 
     if args.prompt_ids_path: 
         prompt_ids = open(args.prompt_ids_path).readlines()
-        prompt_ids = [x.strip().lower() for x in prompt_ids]
+        prompt_ids = [x.strip().lower() for x in prompt_ids[:len(text_data)]]
         assert(len(prompt_ids) == len(text_data))
     elif not args.labels_path:
         raise Exception("No prompt ids identified, permuting not possible.")
@@ -293,33 +293,32 @@ def encode_dataset(tokenizer, text_data, image_data):
     return text_data, image_list
 
 
-def encode_data(tokenizer, data, MAX_LEN):
-    input_ids, attention_mask = [], []
-    input = data.prompt + data.response
-    encoding = tokenizer(input, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
-    
-    if len(encoding["input_ids"]) > 256:
-        input_ids.append(torch.Tensor(encoding["input_ids"][:256]))
-        attention_mask.append(torch.Tensor(encoding["attention_mask"][:256]))
-    else:
-        input_ids.append(torch.Tensor(encoding["input_ids"]))
-        attention_mask.append(torch.Tensor(encoding["attention_mask"]))
-    return input_ids, attention_mask
-
 # def encode_data(tokenizer, data, MAX_LEN):
 #     input_ids, attention_mask = [], []
-#     prompt_encoding = tokenizer(data.prompt, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
-#     response_encoding = tokenizer(data.response, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
-#     text_embedding = torch.Tensor(np.concatenate((prompt_encoding["input_ids"], response_encoding["input_ids"]), axis=0))
-#     text_embedding_mask = torch.Tensor(np.concatenate((prompt_encoding["attention_mask"], response_encoding["attention_mask"]), axis=0))
-#     # input_ids = torch.cat((prompt_encoding, response_encoding))
-#     if len(prompt_encoding["input_ids"]) > 256:
-#         input_ids.append(text_embedding[:256])
-#         attention_mask.append(text_embedding_mask[:256])
+#     input = data.prompt + data.response
+#     encoding = tokenizer(input, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
+#     if len(encoding["input_ids"]) > 256:
+#         input_ids.append((encoding["input_ids"][:256]))
+#         attention_mask.append((encoding["attention_mask"][:256]))
 #     else:
-#         input_ids.append(text_embedding)
-#         attention_mask.append(text_embedding_mask)
+#         input_ids.append((encoding["input_ids"]))
+#         attention_mask.append((encoding["attention_mask"]))
 #     return input_ids, attention_mask
+
+def encode_data(tokenizer, data, MAX_LEN):
+    input_ids, attention_mask = [], []
+    prompt_encoding = tokenizer(data.prompt, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
+    response_encoding = tokenizer(data.response, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)
+    text_embedding = torch.Tensor(np.concatenate((prompt_encoding["input_ids"], response_encoding["input_ids"]), axis=0))
+    text_embedding_mask = torch.Tensor(np.concatenate((prompt_encoding["attention_mask"], response_encoding["attention_mask"]), axis=0))
+    # input_ids = torch.cat((prompt_encoding, response_encoding))
+    if len(prompt_encoding["input_ids"]) > 256:
+        input_ids.append(text_embedding[:256])
+        attention_mask.append(text_embedding_mask[:256])
+    else:
+        input_ids.append(text_embedding)
+        attention_mask.append(text_embedding_mask)
+    return input_ids, attention_mask
 
 
 

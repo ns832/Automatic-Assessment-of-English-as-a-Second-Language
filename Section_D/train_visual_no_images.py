@@ -12,7 +12,7 @@
 # parser = argparse.ArgumentParser(description='Get all command line arguments.')
 # parser.add_argument('--folder_path', type=str, default=None, help='Load path of the folder containing prompts, responses etc.')
 # parser.add_argument('--prompts_path', type=str, default=None, help='Load path of question training data')
-# parser.add_argument('--resps_path', type=str, default=None, help='Load path of answer training data')
+# parser.add_argument('--responses_path', type=str, default=None, help='Load path of answer training data')
 # parser.add_argument('--prompt_ids_path', type=str, default=None, help='Load path of prompt ids')
 # parser.add_argument('--topics_path', type=str, default=None, help='Load path of topics')
 # parser.add_argument('--topic_dist_path', type=str, default=None, help='Load path of prompt distribution')
@@ -48,8 +48,8 @@
 #     def __getitem__(self, index):
 #         item = self.data[index]
 #         return {
-#             'text': item.text[0].to(torch.int),
-#             'mask': item.mask[0].to(torch.int),
+#             'text': torch.Tensor(item.text[0]).to(torch.int64),
+#             'mask': torch.Tensor(item.mask[0]).to(torch.int64),
 #             'target': item.target
 #         }
  
@@ -105,21 +105,20 @@
 #         print('\n ======== Epoch {:} / {:} ========'.format(epoch + 1, args.n_epochs))
 #         total_loss = 0
         
-#         for __ , batch in enumerate(train_dataloader):          
+#         for step , batch in enumerate(train_dataloader):          
 #             model.zero_grad()
 #             input_ids = batch['text'].to(device) 
 #             attention_mask = batch['mask'].to(device) 
-#             targets_batch = batch['target'].to(device).to(int)
-            
+#             targets_batch = batch['target'].to(device).to(torch.int64)
+
 #             output = model(input_ids, attention_mask, targets_batch)
 #             loss = output[0]
 #             total_loss += loss
-            
 #             optimizer.zero_grad()
+#             if step%100 == 0: print(step, " : ", loss.item())
 #             loss.backward()
 #             optimizer.step()
 #             scheduler.step()
-            
 #         avg_train_loss = total_loss / len(train_dataloader)
 #         print("Avg loss: ", avg_train_loss.item())
 #         f_score = eval_model(model, val_dataloader)
@@ -132,20 +131,23 @@
 # def eval_model(model, val_dataloader):
     
 #     y_pred_list, targets = [], []  
+#     total_loss = 0
     
 #     for batch in val_dataloader:
 #         input_ids = batch['text'].to(device) 
 #         attention_mask = batch['mask'].to(device) 
 #         targets_batch = batch['target'].to(device).to(int)
-        
+
 #         with torch.no_grad():
 #             output = model(input_ids, attention_mask, targets_batch)
+#         loss = output[0]
 #         logits = output[1]
+#         total_loss += loss.item()
         
 #         y_pred_list += np.squeeze(logits.cpu().detach().numpy())[:,1].tolist()
 #         targets += targets_batch.cpu().detach().numpy().tolist()
     
-
+#     print(total_loss)
 #     targets = np.array(targets)
 #     y_pred_list = np.array(y_pred_list)
 #     f_score = metrics.calculate_metrics(targets, y_pred_list)
@@ -157,6 +159,10 @@
 #     config = BertConfig()    
 #     model = Model(config)
 #     tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
+
+#     # Freeze all parameters except for linear layer
+#     # for param in classifier.image_embedder.parameters():
+#     #     param.requires_grad = False
     
 #     if device == 'cuda':
 #         model.to(device)
@@ -167,7 +173,6 @@
 #                     no_deprecation_warning=True
 #                     # weight_decay = 0.01
 #                     )
-    
 #     return model, tokenizer, optimizer
 
 
@@ -175,15 +180,10 @@
 #     preprocess_data.set_seed(args)
 #     model, tokenizer, optimizer = configure_model(args, bert_base_uncased="prajjwal1/bert-small")
     
-#     # Freeze all parameters except for linear layer
-#     # for param in classifier.image_embedder.parameters():
-#     #     param.requires_grad = False
-    
 #     # Load data from files
-#     text_data, image_data, topics = preprocess_data.load_dataset(args)
-#     np.random.shuffle(text_data)
-        
-#     text_data = encode_dataset(tokenizer, text_data[:50000])
+#     text_data, image_data, topics = preprocess_data.load_dataset(args, images = False)
+#     text_data = encode_dataset(tokenizer, text_data)
+
     
 #     # Preprocess visual data
 #     # image_data = preprocess_data.load_images(image_data, args)  
@@ -191,15 +191,12 @@
 #     # image_list = preprocess_data.apply_image_processor(image_list, image_processor)
 #     # combined_data = preprocess_data.remove_mismatching_prompts(image_list, text_data)
     
-#     # Create dataloader
-#     combined_train_data = np.array([x for x in text_data[:5000]])    
+    
+#     combined_train_data = np.array([x for x in text_data])
 #     train_data = CustomDataset(combined_train_data)
-#     train_dataloader = DataLoader(train_data, batch_size=args.batch_size)
-    
-#     combined_val_data = np.array([x for x in text_data[-500:]])
-#     val_data = CustomDataset(combined_val_data)
-#     val_dataloader = DataLoader(val_data, batch_size=args.batch_size)
-    
+#     train_sampler = RandomSampler(train_data)
+#     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
+#     val_dataloader = train_dataloader
 #     model = train_model(args, model, optimizer, train_dataloader, val_dataloader)
 #     metrics.save_model(model, "_")
     
@@ -208,7 +205,7 @@
 # if __name__ == '__main__':
 #     if args.folder_path:
 #         if args.prompts_path == None: args.prompts_path = str(args.folder_path) + "prompts.txt"
-#         if args.resps_path == None: args.resps_path = str(args.folder_path) + "responses.txt"
+#         if args.responses_path == None: args.responses_path = str(args.folder_path) + "responses.txt"
 #         if args.topics_path == None: args.topics_path = str(args.folder_path) + "topics.txt"
 #         if args.topic_dist_path == None: args.topic_dist_path = str(args.folder_path) + "topics_dist.txt"
 #         if args.labels_path == None: args.labels_path = str(args.folder_path) + "targets.txt"
@@ -231,6 +228,7 @@ from transformers import AdamW
 from transformers import get_linear_schedule_with_warmup
 import matplotlib.pyplot as plt
 import torch.nn as nn
+import preprocess_data
 import metrics
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
@@ -240,7 +238,7 @@ parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids
 parser.add_argument('--topics_path', type=str, help='Load path of question training data')
 parser.add_argument('--topic_dist_path', type=str, help='Load path of question training data')
 parser.add_argument('--batch_size', type=int, default=12, help='Specify the training batch size')
-parser.add_argument('--learning_rate', type=float, default=1e-5, help='Specify the initial learning rate')
+parser.add_argument('--learning_rate', type=float, default=1e-6, help='Specify the initial learning rate')
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
 parser.add_argument('--lr_decay', type=float, default=0.85, help='Specify the learning rate decay rate')
 parser.add_argument('--dropout', type=float, default=0.1, help='Specify the dropout rate')
@@ -272,26 +270,26 @@ def load_dataset(args, bert_base_uncased):
     tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
     encoded_prompts, encoded_responses = [], []
     prompt_attention_masks, response_attention_masks = [], []
-    validation_encoded_prompts, validation_encoded_responses = [], []
-    validation_prompt_attention_masks, validation_response_attention_masks = [], []
+    val_encoded_prompts, val_encoded_responses = [], []
+    val_prompt_attention_masks, val_response_attention_masks = [], []
     
     with open(args.prompt_ids_path) as f0, open(args.responses_path) as f1, open(args.topics_path) as f2:
-        prompt_ids, responses, topics = f0.readlines(), f1.readlines(), f2.readlines()
-        prompt_ids = [x.strip().lower() for x in prompt_ids[:5000]]
-        responses = [x.strip().lower() for x in responses[:5000]]
-        validation_prompt_ids = [x.strip().lower() for x in prompt_ids[-500:]]
-        validation_responses = [x.strip().lower() for x in responses[-500:]]
+        prompt_ids_file, responses_file, topics = f0.readlines(), f1.readlines(), f2.readlines()
+        prompt_ids = [x.strip().lower() for x in prompt_ids_file[:-100]]
+        responses = [x.strip().lower() for x in responses_file[:-100]]
+        val_prompt_ids = [x.strip().lower() for x in prompt_ids_file[-100:]]
+        val_responses = [x.strip().lower() for x in responses_file[-100:]]
         topics = [x.strip().lower() for x in topics]
         
         print("Dataset Loaded")
         
         # choose to permute the dataset and concatenate it with the original dataset
         val = int(len(prompt_ids))
-        val_2 = int(len(validation_prompt_ids))
+        val_2 = int(len(val_prompt_ids))
         prompts = permute_data(prompt_ids, val, topics, args)
-        validation_prompts = permute_data(validation_prompt_ids, val_2, topics, args)
+        val_prompts = permute_data(val_prompt_ids, val_2, topics, args)
         responses += responses # since we doubled the prompt size
-        validation_responses += validation_responses # since we doubled the prompt size
+        val_responses += val_responses # since we doubled the prompt size
         
         # max_prompt_length = max([len(sentence) for sentence in prompts]) max_resp_length = max([len(sentence) for sentence in responses])
         max_prompt_length, max_resp_length = 256, 256
@@ -302,23 +300,22 @@ def load_dataset(args, bert_base_uncased):
             encoded_response, response_attention_mask = encode_data(tokenizer, response, max_resp_length)
             encoded_prompts.append(encoded_prompt), prompt_attention_masks.append(prompt_attention_mask)
             encoded_responses.append(encoded_response), response_attention_masks.append(response_attention_mask)
-        for (prompt, response) in zip(validation_prompts, validation_responses):
+        for (prompt, response) in zip(val_prompts, val_responses):
             encoded_prompt, prompt_attention_mask = encode_data(tokenizer, prompt, max_prompt_length)
             encoded_response, response_attention_mask = encode_data(tokenizer, response, max_resp_length)
-            validation_encoded_prompts.append(encoded_prompt), validation_prompt_attention_masks.append(prompt_attention_mask)
-            validation_encoded_responses.append(encoded_response), validation_response_attention_masks.append(response_attention_mask)
-    
+            val_encoded_prompts.append(encoded_prompt), val_prompt_attention_masks.append(prompt_attention_mask)
+            val_encoded_responses.append(encoded_response), val_response_attention_masks.append(response_attention_mask)
+
     # Targets i.e. first half is on-topic, second half is off-topic
     targets = torch.tensor([1] * val + [0] * val) 
-    validation_targets = torch.tensor([1] * val_2 + [0] * val_2) 
+    val_targets = torch.tensor([1] * val_2 + [0] * val_2) 
     encoded_prompts, encoded_responses = torch.tensor(encoded_prompts), torch.tensor(encoded_responses)
     prompt_attention_masks, response_attention_masks = torch.tensor(prompt_attention_masks), torch.tensor(response_attention_masks)
-    validation_encoded_prompts, validation_encoded_responses = torch.tensor(validation_encoded_prompts), torch.tensor(validation_encoded_responses)
-    validation_prompt_attention_masks, validation_response_attention_masks = torch.tensor(validation_prompt_attention_masks), torch.tensor(validation_response_attention_masks)
-    
+    val_encoded_prompts, val_encoded_responses = torch.tensor(val_encoded_prompts), torch.tensor(val_encoded_responses)
+    val_prompt_attention_masks, val_response_attention_masks = torch.tensor(val_prompt_attention_masks), torch.tensor(val_response_attention_masks)
     
     train_dataloader = create_dataset(encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_masks, targets)
-    validation_dataloader = create_dataset(validation_encoded_prompts, validation_encoded_responses, validation_prompt_attention_masks, validation_response_attention_masks, validation_targets)
+    validation_dataloader = create_dataset(val_encoded_prompts, val_encoded_responses, val_prompt_attention_masks, val_response_attention_masks, val_targets)
     
     return train_dataloader, validation_dataloader
 
@@ -369,7 +366,7 @@ def create_dataset(encoded_prompts, encoded_responses, prompt_attention_masks, r
     prompt_and_response_masks = torch.cat((prompt_attention_masks, response_attention_masks),1)
     prompt_and_response = prompt_and_response.squeeze(1)
     prompt_and_response_masks = prompt_and_response_masks.squeeze(1)
-    
+
     train_data = TensorDataset(prompt_and_response, prompt_and_response_masks, targets)
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.batch_size)
@@ -407,6 +404,7 @@ def configure_model( device):
     
     if device == 'cuda':
         model.to(device)
+        
     return model
 
 
@@ -453,17 +451,19 @@ def train_model(args, optimizer, model, device, train_dataloader, validation_dat
             outputs = model(input_ids=prompt_response, attention_mask=prompt_response_mask, labels=targets_batch)
             loss = outputs[0]
             total_loss += loss.item()
+            if step%100 == 0: print(step, ":", loss.item())
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             scheduler.step()
-        
-        print("avg_train_loss", total_loss / len(train_dataloader))
+        avg_loss = total_loss / len(train_dataloader)
+        print("avg_train_loss", avg_loss)
         f_score = eval_model(model, device, validation_dataloader)
         if f_score < old_f_score: break
         else: old_f_score = f_score
-    
+    return model, avg_loss
+
 
 def send_to_device(device, x):
     x = x.clone().detach()
@@ -475,14 +475,17 @@ def send_to_device(device, x):
 def eval_model(model, device, validation_dataloader):
     model.eval()    
     y_pred_all, targets = [], []
+    total_loss = 0
     
     for batch in validation_dataloader:
         prompt_response = (batch[0].to(device)).squeeze(1)
         prompt_response_mask = (batch[1].to(device)).squeeze(1)
         targets_batch = batch[2].to(device) 
-            
+
         with torch.no_grad():
             outputs = model(input_ids=prompt_response, attention_mask=prompt_response_mask, labels=targets_batch)
+        loss = outputs[0]
+        total_loss += loss.item()
         logits = outputs[1]
         logits = logits.cpu()
         logits = logits.detach().numpy()
@@ -492,7 +495,7 @@ def eval_model(model, device, validation_dataloader):
         targets_batch = targets_batch.cpu().detach().numpy()
         targets_batch = np.squeeze(targets_batch).tolist()
         targets += targets_batch 
-        
+    print(total_loss)
     y_pred_all = np.array(y_pred_all)
     targets = np.array(targets)
     
@@ -501,11 +504,11 @@ def eval_model(model, device, validation_dataloader):
 
 
 def save_model(args, model, avg_train_loss):
-    file_path = str(args.save_path) + '/bert_model_' + str(avg_train_loss) + '.pt'
+    file_path = str(args.save_path) + '/bert_vit_' + str(avg_train_loss) + '.pt'
     print(file_path)
     torch.save(model, file_path)
     return
-
+    
 
 def main(args):
     # bert_base_uncased = "bert-base-uncased"
@@ -514,15 +517,18 @@ def main(args):
     
     device = get_default_device()
     train_dataloader, validation_dataloader = load_dataset(args, bert_base_uncased)
-    print("Dataset Encoded")
+
+    # tokenizer = BertTokenizer.from_pretrained(bert_base_uncased, do_lower_case=True)
+    # text_data, _, _ = preprocess_data.load_dataset(args, images = False)
+    # text_data = encode_dataset(tokenizer, text_data)
     
     
     model = configure_model(device)
     optimizer = configure_optimiser(model, args)
     
-    train_model(args, optimizer, model, device, train_dataloader, validation_dataloader)
-     
-
+    model, avg_train_loss = train_model(args, optimizer, model, device, train_dataloader, validation_dataloader)
+    # save_model(args, model, avg_train_loss)
+    metrics.save_model(model, avg_train_loss)
 
 if __name__ == '__main__':
     args = parser.parse_args()

@@ -4,6 +4,7 @@ from sklearn.metrics import precision_recall_curve, PrecisionRecallDisplay
 import matplotlib.pyplot as plt
 import os
 
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def multiplots(predictions_list, targets_list, keys_list):
@@ -199,3 +200,5 @@ def save_model(model, avg_train_loss):
             break            
         else:
             print("Invalid response. Please enter 'y' or 'n'.")
+            
+    
