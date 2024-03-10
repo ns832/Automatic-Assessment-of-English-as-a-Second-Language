@@ -3,20 +3,20 @@ import numpy as np
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--prompts_path', type=str, help='Load path to test prompts as text')
-parser.add_argument('--resps_path', type=str, help='Load path to test responses as text')
+parser.add_argument('--responses_path', type=str, help='Load path to test responses as text')
 parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids')
 parser.add_argument('--sections_path', type=str, help='Load path to labels')
 parser.add_argument('--targets_path', type=str, help='Load path to targets')
 parser.add_argument('--save_path', type=str, help='Path where the data will be saved')
 args = parser.parse_args()
 
-print("Isolating section D")
-with open(args.prompt_ids_path) as f0, open(args.resps_path) as f1, open(args.sections_path) as f2, open(args.prompts_path) as f3:
+print("Isolating section C")
+with open(args.prompt_ids_path) as f0, open(args.responses_path) as f1, open(args.sections_path) as f2, open(args.prompts_path) as f3:
     responses, prompts, prompt_ids = [], [], []
-    question_ids, resps, sections, questions = f0.readlines(), f1.readlines(), f2.readlines(), f3.readlines()
-    for question_id, response, section, question in zip(question_ids, resps, sections, questions):
-        if "D" in section:
-            print("Section D found")
+    question_ids, responses, sections, questions = f0.readlines(), f1.readlines(), f2.readlines(), f3.readlines()
+    for question_id, response, section, question in zip(question_ids, responses, sections, questions):
+        if "C" in section:
+            print("Section C found")
             print("Adding responses, prompts, prompt_ids and targets")
             responses.append(response)
             prompts.append(question)
@@ -39,17 +39,17 @@ with open(args.prompt_ids_path) as f0, open(args.resps_path) as f1, open(args.se
         out_prompt_ids.write(prompt_id)
     out_prompt_ids.close()
 
-# with open(args.targets_path) as f0, open(args.sections_path) as f1:
-#     target_list = []
-#     targets, sections = f0.readlines(), f1.readlines()
-#     for target, section in zip(targets, sections):
-#         if "D" in section:
-#             print("Section D found")
-#             target_list.append(target)
+with open(args.targets_path) as f0, open(args.sections_path) as f1:
+    target_list = []
+    targets, sections = f0.readlines(), f1.readlines()
+    for target, section in zip(targets, sections):
+        if "C" in section:
+            print("Section C found")
+            target_list.append(target)
             
-#     save_path_targets = args.save_path + "targets.txt"
+    save_path_targets = args.save_path + "targets.txt"
     
-#     out_targets = open(save_path_targets, 'w')
-#     for target in target_list:
-#         out_targets.write(target)
-#     out_targets.close()
+    out_targets = open(save_path_targets, 'w')
+    for target in target_list:
+        out_targets.write(target)
+    out_targets.close()

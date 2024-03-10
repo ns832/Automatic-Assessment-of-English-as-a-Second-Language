@@ -16,6 +16,7 @@ parser.add_argument('--prompts_path', type=str, help='Load path of question trai
 parser.add_argument('--responses_path', type=str, help='Load path of answer training data')
 parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids')
 parser.add_argument('--topics_path', type=str, help='Load path of question training data')
+parser.add_argument('--topic_dist_path', type=str, help='Load path of question training data')
 parser.add_argument('--batch_size', type=int, default=12, help='Specify the training batch size')
 parser.add_argument('--learning_rate', type=float, default=1e-5, help='Specify the initial learning rate')
 parser.add_argument('--adam_epsilon', type=float, default=1e-6, help='Specify the AdamW loss epsilon')
@@ -59,7 +60,7 @@ def load_dataset(args, bert_base_uncased):
         
         # choose to permute the dataset and concatenate it with the original dataset
         val = int(len(prompt_ids))
-        prompts = permute_data(prompt_ids, val, topics)
+        prompts = permute_data(prompt_ids, val, topics, args)
         responses += responses # since we doubled the prompt size
         
         # max_prompt_length = max([len(sentence) for sentence in prompts]) max_resp_length = max([len(sentence) for sentence in responses])
@@ -76,13 +77,12 @@ def load_dataset(args, bert_base_uncased):
     targets = torch.tensor([1] * val + [0] * val) 
     encoded_prompts, encoded_responses = torch.tensor(encoded_prompts), torch.tensor(encoded_responses)
     prompt_attention_masks, response_attention_masks = torch.tensor(prompt_attention_masks), torch.tensor(response_attention_masks)
-    print(encoded_prompts.size(), encoded_responses.size())
     return encoded_prompts, encoded_responses, prompt_attention_masks, response_attention_masks, targets
 
 
-def permute_data(prompt_ids, val, topics): 
+def permute_data(prompt_ids, val, topics, args): 
     # Dynamic shuffling in order to generate off-topic samples, based on prompt probability dist.
-    unique_prompts_distribution_path = "/scratches/dialfs/alta/relevance/ns832/data/train_seen/training/topics_dist.txt" 
+    unique_prompts_distribution_path = args.topic_dist_path 
     prompt_distribution = np.loadtxt(unique_prompts_distribution_path, dtype=np.int32)
     prompt_distribution = prompt_distribution / np.linalg.norm(prompt_distribution, 1)
     number_of_questions = len(prompt_distribution)
@@ -126,7 +126,6 @@ def create_dataset(encoded_prompts, encoded_responses, prompt_attention_masks, r
     prompt_and_response_masks = torch.cat((prompt_attention_masks, response_attention_masks),1)
     prompt_and_response = prompt_and_response.squeeze(1)
     prompt_and_response_masks = prompt_and_response_masks.squeeze(1)
-    print(prompt_and_response.size(), prompt_and_response_masks.size(), targets.size())
     
     train_data = TensorDataset(prompt_and_response, prompt_and_response_masks, targets)
     train_sampler = RandomSampler(train_data)
@@ -198,9 +197,6 @@ def train_model(args, optimizer, model, device, train_dataloader):
             prompt_response = (batch[0].to(device)).squeeze(1)
             prompt_response_mask = (batch[1].to(device)).squeeze(1)
             targets_batch = batch[2].to(device) 
-            # print(prompt_response.size())
-            # print(prompt_response_mask.size())
-            # print(targets_batch.size())
             
             # First compute the outputs given the current weights, and the current and total loss
             outputs = model(input_ids=prompt_response, attention_mask=prompt_response_mask, labels=targets_batch)
@@ -247,7 +243,7 @@ def main(args):
     
     avg_train_loss = train_model(args, optimizer, model, device, train_dataloader)
     save_model(args, model, avg_train_loss)
-    return
+    return 
 
 
 if __name__ == '__main__':

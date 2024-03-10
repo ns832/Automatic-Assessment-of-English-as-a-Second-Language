@@ -10,7 +10,7 @@ import Section_D.metrics as metrics
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--folder_path', type=str, default=None, help='Load path of the folder containing prompts, responses etc.')
 parser.add_argument('--prompts_path', type=str, default=None, help='Load path of question training data')
-parser.add_argument('--resps_path', type=str, default=None, help='Load path of answer training data')
+parser.add_argument('--responses_path', type=str, default=None, help='Load path of answer training data')
 parser.add_argument('--prompt_ids_path', type=str, default=None, help='Load path of prompt ids')
 parser.add_argument('--topic_dist_path', type=str, default=None, help='Load path of prompt distribution')
 parser.add_argument('--topics_path', type=str, default=None, help='Load path of topics')
@@ -57,13 +57,13 @@ def create_prompts(text_data):
     """    
     # Iterates through the text_data list and creates prompts to feed into the model
     for data in  text_data :
-        LLaMA_prompt = """<s>[INST] Respond to the prompts with only 'On' or 'Off' depending on if the answer is relevant to the question asked. For instance:
+        Mistral_prompt = """<s>[INST] Respond to the prompts with only 'On' or 'Off' depending on if the answer is relevant to the question asked. For instance:
                         [Question] this chart shows the number of positive and negative responses given in a survey concerning customer satisfaction with a hotel look at the information and talk about the results of the customer survey.
                         [Answer] this charts present results of survey in hotel most negative response was given about the value for money it was about about nine hundred person and the best results get response for question about attitude of staff it was at about nine hundred and half percent and at about half of respondents talk that parking is positive and at about. 
                         Would be converted to:[/INST] On </s>
                         [INST] [Question] """ + data.prompt.strip().lower().replace("</s>", "") + """. 
                         [Answer] """  + data.response.strip().lower().replace("</s>", "") + ". [/INST]"
-        data.text = LLaMA_prompt
+        data.text = Mistral_prompt
     # Print a random prompt to check the format of the question is as desired
     print("Random prompt: ", text_data[np.random.randint(0, len(text_data))].text)
     return text_data
@@ -152,7 +152,7 @@ def main(args):
     text_data, __ , __ = preprocess_data.load_dataset(args, images = False)
     # Shuffling is done here (as well as during create_dataloader()) if only a subsection of the data is used for testing purposes
     np.random.shuffle(text_data)
-    text_data = create_prompts(text_data[:4000])
+    text_data = create_prompts(text_data)
     
     # Run the evaluation and obtain scores for 'On-topic'
     train_dataloader = create_dataloader(tokenizer, text_data, device)
@@ -169,7 +169,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.folder_path:
         if args.prompts_path == None: args.prompts_path = str(args.folder_path) + "prompts.txt"
-        if args.resps_path == None: args.resps_path = str(args.folder_path) + "responses.txt"
+        if args.responses_path == None: args.responses_path = str(args.folder_path) + "responses.txt"
         if args.topics_path == None: args.topics_path = str(args.folder_path) + "topics.txt"
         if args.topic_dist_path == None: args.topic_dist_path = str(args.folder_path) + "topics_dist.txt"
         if args.labels_path == None: args.labels_path = str(args.folder_path) + "targets.txt"

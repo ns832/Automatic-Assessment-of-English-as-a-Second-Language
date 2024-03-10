@@ -13,17 +13,14 @@ parser.add_argument('--real_topics_path', type=str, default="/scratches/dialfs/a
 
 
 def match_image_id_to_prompt(args):
-    subfolders = os.listdir(args.main_folder_path)
-
     # Get image ids
     image_files = os.listdir(args.image_folder_path)
     image_files = [x.strip() for x in image_files]
     image_files = [x for x in image_files if x[0] != "." and x != "README.txt"]
     image_files = [((x.replace('.', '')).replace('png', '')) for x in image_files]
-    
     prompt_dict = dict()
     
-    # Get prompt
+    
     for i, image in enumerate(image_files):
         # Extract line number with that prompt id
         print(i)
@@ -43,86 +40,92 @@ def match_image_id_to_prompt(args):
         if prompt in prompt_dict.keys():
             print("Duplicate prompt: ", prompt, "Ids: ", prompt_dict[prompt], image)
         prompt_dict[prompt.strip()] = image
-        # print(prompt, image)
         
-    print(len(prompt_dict.keys()))
-    # save_path = "/scratches/dialfs/alta/relevance/ns832/data/prompt_database/"      
-    # prompts_file = open(save_path + "prompts.txt", 'w')
-    # prompt_ids_file = open(save_path + "prompts.txt", 'w')
-    
-    # for prompt, prompt_id in zip(prompt_dict.keys(), prompt_dict.values()):
-    #     prompts_file.write(prompt)
-    #     prompt_ids_file.write(prompt_id)
-    # prompts_file.close()     
-    # prompt_ids_file.close()     
-    
+        
     with open(args.real_prompts_path) as f1, open(args.real_responses_path) as f2, open(args.real_targets_path) as f3, open(args.real_topics_path) as f4: 
         prompts = f1.readlines()
-        prompt_set = {x.strip() for x in prompts}
+        responses = f2.readlines()
+        targets = f3.readlines()
+        
+        prompt_list, response_list, target_list, prompt_id_list = [],[],[],[]
+        prompts = {x.strip() for x in prompts}
+        # prompts = [x.strip() for x in prompts]
         
         no_id_list = []
-        for prompt in prompt_set:
+        for prompt, response, target in zip(prompts, responses, targets):
             if prompt not in prompt_dict.keys():
                 print("Prompt_id: None Prompt:", prompt)
                 no_id_list.append(prompt)
+            else:
+                prompt_list.append(prompt)
+                # response_list.append(response)
+                # target_list.append(target)
+                prompt_id_list.append(prompt_dict[prompt])
                 
-        # save_path = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/eval_real/"      
-        # no_id = open(save_path + "missing_prompts.txt", 'w')
-        # for prompt in no_id_list:
-        #     no_id.write(prompt)
-        # no_id.close()              
+        save_path = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/eval_real/"      
+        prompt_file = open(save_path + "image_questions.txt", 'w')
+        for prompt in prompt_list:
+            prompt_file.write(prompt + "\n")
+        prompt_file.close()                 
+        # resp_file = open(save_path + "responses.txt", 'w')
+        # for resp in response_list:
+        #     resp_file.write(resp + "\n")
+        # resp_file.close()             
+        # target_file = open(save_path + "targets.txt", 'w')
+        # for target in target_list:
+        #     target_file.write(target + "\n")
+        # target_file.close()         
+        ids_file = open(save_path + "image_ids.txt", 'w')
+        for id in prompt_id_list:
+            ids_file.write(id + "\n")
+        ids_file.close()           
+        # topics_file = open(save_path + "topics.txt", 'w')
+        # for topic in topic_list:
+        #     topics_file.write(topic + "\n")
+        # topics_file.close()          
                 
     return
 
-# First loop through the images
-
-    # Within that loop, loop through the prompts and look at which maximises the probability/f_score
-    
-    # Within this loop the function should call LLaVA on 1000 trials and return the f_score
-    
               
-def match_prompt_to_id(missing_path = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/eval_real/missing_prompts.txt"):
-    missing_prompts = open(missing_path).readlines()
-    missing_prompts = [x for x in missing_prompts]
+def match_prompt_to_image_id(path, new_file_name, search_path = "/scratches/dialfs/alta/relevance/data/relevance_v2/"):
+    prompts = open(path).readlines()
+    prompts = {x.upper() for x in prompts}
+    prompt_ids = []
     
-    missing_prompt_ids = []
-    
-    for prompt in missing_prompts:
+    for i,prompt in enumerate(prompts):
         prompt = prompt.replace('\n', '')
-        search_path = "/scratches/dialfs/alta/relevance/data/relevance_v2/"
+        command = "grep -m 1 -o -R -n \"" + prompt +"\" " + search_path +  " | cut -d \":\" -f 2 |  sed -n '1p'"
+        line_number = os.popen(command).read()
+        if line_number == "": 
+            print("Not found: ", command)
+            raise
         
-        n = 1
-        while True:
-            command = "grep -m 1 -o -R -n \"" + prompt +"\" " + search_path +  " | cut -d \":\" -f 2 |  sed -n '" + str(n) + "p'"
-            line_number = os.popen(command).read()
-            if line_number == "": 
-                print("Not found: ", command)
-                raise
-            # Get file name associated with the line
-            command = "grep -m 1 -o -R -n \"" + prompt +"\" " + search_path +  " | cut -d \":\" -f 1 |  sed -n '" + str(n) + "p'"
-            file = os.popen(command).read()
-            
-            if "/prompts.txt" in file: file = file.replace("prompts", "prompt_ids")
-                
-            if file != "":break
-            n += 15
+        # Get file name associated with the line
+        command = "grep -m 1 -o -R -n \"" + prompt +"\" " + search_path +  " | cut -d \":\" -f 1 |  sed -n '1p'"
+        file = os.popen(command).read()
+        if "/prompts.txt" in file: file = file.replace("prompts", "prompt_ids")
             
         # Get the prompt
         command =  "sed -n '" + line_number.strip() + "p' " + file
 
         prompt_id = os.popen(command).read().strip("\n")
         if "_" in prompt_id: prompt_id = prompt_id.split()[1]
-        missing_prompt_ids.append(prompt_id)
+        prompt_ids.append(prompt_id)
+        print("Prompt id ", i, "of ", len(prompts), "added:", prompt_id)
     
-    
-    # save_path = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/eval_real/"
-    # out_file = open(save_path + "missing_prompt_ids.txt", 'w')
-    # for id in missing_prompt_ids:
+    # out_file = open(new_file_name, 'w')
+    # for id in prompt_ids:
     #     out_file.write(id + "\n")
     # out_file.close()
     
     
 if __name__ == '__main__':
     args = parser.parse_args()
-    match_image_id_to_prompt(args)
-    # match_prompt_to_id()
+    # match_image_id_to_prompt(args)
+    # missing_path = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/eval_real/missing_prompts.txt"
+    # new_file_name = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/eval_real/missing_prompt_ids.txt"
+    # match_prompt_to_image_id(missing_path, new_file_name)
+    
+    path = "/scratches/dialfs/alta/relevance/ns832/data/relevance_v2/LIESTgrp06/prompts.txt"
+    new_file_name = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/eval_real/image_ids"
+    match_prompt_to_image_id(path, new_file_name)

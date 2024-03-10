@@ -3,7 +3,7 @@ import numpy as np
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--prompts_path', type=str, help='Load path to test prompts as text')
-parser.add_argument('--resps_path', type=str, help='Load path to test responses as text')
+parser.add_argument('--responses_path', type=str, help='Load path to test responses as text')
 parser.add_argument('--prompt_ids_path', type=str, help='Load path of prompt ids')
 parser.add_argument('--topics_path', type=str, help='Load path of question training data')
 parser.add_argument('--topic_dist_path', type=str, help='Load path of question training data')
@@ -30,7 +30,7 @@ def permute_data(prompt_ids, val, topics, args):
     return new_prompt_list
 
 def main(args):
-    with open(args.prompt_ids_path) as f0, open(args.resps_path) as f1, open(args.topics_path) as f3:
+    with open(args.prompt_ids_path) as f0, open(args.responses_path) as f1, open(args.topics_path) as f3:
         question_ids, responses, topics = f0.readlines(), f1.readlines(), f3.readlines()
         val = int(len(question_ids))
         shuffled_prompts = permute_data(question_ids, val, topics, args)

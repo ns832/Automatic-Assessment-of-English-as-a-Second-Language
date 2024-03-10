@@ -17,13 +17,12 @@ from PIL import Image
 from transformers import TextStreamer
 import Section_D.preprocess_data as preprocess_data
 import Section_D.metrics as metrics
-import helper_scripts.create_composite_image
 
 # An optional folder_path can be supplied if multiple files are in the same directory - any file_path not given is then assumed to be in this folder
 parser = argparse.ArgumentParser()
 parser.add_argument('--folder_path', type=str, default=None, help='Load path of the folder containing prompts, responses etc.')
 parser.add_argument('--prompts_path', type=str, default=None, help='Load path of question training data')
-parser.add_argument('--resps_path', type=str, default=None, help='Load path of answer training data')
+parser.add_argument('--responses_path', type=str, default=None, help='Load path of answer training data')
 parser.add_argument('--prompt_ids_path', type=str, default=None, help='Load path of prompt ids')
 parser.add_argument('--topic_dist_path', type=str, default=None, help='Load path of prompt distribution')
 parser.add_argument('--topics_path', type=str, default=None, help='Load path of topics')
@@ -44,6 +43,7 @@ parser.add_argument("--conv-mode", type=str, default=None)
 parser.add_argument("--load-8bit", action="store_true")
 parser.add_argument("--load-4bit", action="store_true")
 
+
 # Global Variables
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
@@ -58,15 +58,13 @@ def get_targets(args, topics, text_data):
     """
     
     # If the data is not real, all the targets are on-topic therefore the dataset needs to be permuted
-    if not args.labels_path:
-        print("No labels detected")
-        text_data = preprocess_data.permute_data(text_data[:500], topics, args)
-        
+    # if not args.labels_path:
+    #     print("No labels detected")
+    #     text_data = preprocess_data.permute_data(text_data, topics, args)
     np.random.shuffle(text_data)
-    text_data = text_data[:1000]  
+    # text_data = text_data 
     off_targets = [x for x in text_data if x.target == 0]
     print("Dataset size: ", len(text_data) , "Proportions: ", len(off_targets) / len(text_data))
-    print(len(text_data))  
     return text_data
 
 
@@ -77,7 +75,7 @@ def create_prompts(text_data):
     """    
     # Iterates through the text_data list and creates prompts to feed into the model
     for data in text_data:
-        if args.images_path and args.overlay == False: LLaMA_prompt = 'Given this image and this question and answer pair, return a single-word response of either ”On” or ”Off” depending on if it is on-topic or off-topic. '
+        if args.images_path and args.overlay != True: LLaMA_prompt = 'Given this image and this question and answer pair, return a single-word response of either ”On” or ”Off” depending on if it is on-topic or off-topic. '
         else: LLaMA_prompt = 'Ignoring the image. Given this question and answer pair, return a single-word response of either ”On” or ”Off” depending on if it is on-topic or off-topic. '
         LLaMA_prompt = LLaMA_prompt + 'Question: ' + data.prompt + ' Answer: ' + data.response
         data.text = LLaMA_prompt
@@ -94,8 +92,10 @@ def eval_model(model, text_data, image_paths, image_processor, tokenizer):
     disable_torch_init()
     on_token = tokenizer("On").input_ids
     off_token = tokenizer("Off").input_ids
+    
     conv_mode = "llava_v1"
     conv = conv_templates[conv_mode].copy()
+
     prob_list = []
     LLaMA_prompt_list = [x.text for x in text_data]
     
@@ -167,24 +167,23 @@ def main(args):
     # Preprocess textual data
     if args.images_path: text_data, image_data, topics = preprocess_data.load_dataset(args)
     else: text_data, image_data, topics = preprocess_data.load_dataset(args, images=False)
-    text_data = get_targets(args, topics, text_data[:1000])
+    text_data = get_targets(args, topics, text_data)
     if args.images_path: text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
 
     # Get model, tokenizer and image processor
     model_name = "liuhaotian/llava-v1.5-7b"
-    tokenizer, model, image_processor, context_len = load_pretrained_model(model_name, args.model_base, model_name, args.load_8bit, args.load_4bit, device=device)
+    tokenizer, model, image_processor, __ = load_pretrained_model(model_name, args.model_base, model_name, args.load_8bit, args.load_4bit, device=device)
     
     # Preprocess visual data
     if args.images_path:
-        image_data = preprocess_data.load_images(image_data, args)             
+        image_data = preprocess_data.load_images(image_data, args)        
         text_data, image_list = preprocess_data.encode_dataset(tokenizer, text_data, image_data)
-        
         # If a composite of all images is to be used instead, set all to overlay.jpg 
         if args.overlay == True:
             print("Assigning all images to the composite")
             composite_path = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/overlay.jpg"
             image_paths = [composite_path for x in image_list]
-        else: image_paths = [args.images_path + str(x.id.upper() + ".png") for x in image_list]
+        else: image_paths = [args.images_path + str(x.id + ".png") for x in image_list]
         assert (len(image_paths) == len(text_data))
     else:
         # If a composite of all images is to be used instead, call helper script  
@@ -195,6 +194,7 @@ def main(args):
         else:
             print("Assigning all images to a blank one")
             file = 'https://upload.wikimedia.org/wikipedia/commons/a/a7/Blank_image.jpg'
+            # file = 'https://upload.wikimedia.org/wikipedia/commons/e/eb/Blank.jpg'
             image_paths = [file for __ in text_data]
     text_data = create_prompts(text_data)
 
@@ -210,7 +210,7 @@ def main(args):
 if __name__ == "__main__":
     if args.folder_path:
         if args.prompts_path == None: args.prompts_path = str(args.folder_path) + "prompts.txt"
-        if args.resps_path == None: args.resps_path = str(args.folder_path) + "responses.txt"
+        if args.responses_path == None: args.responses_path = str(args.folder_path) + "responses.txt"
         if args.topics_path == None: args.topics_path = str(args.folder_path) + "topics.txt"
         if args.topic_dist_path == None: args.topic_dist_path = str(args.folder_path) + "topics_dist.txt"
         if args.labels_path == None: args.labels_path = str(args.folder_path) + "targets.txt"

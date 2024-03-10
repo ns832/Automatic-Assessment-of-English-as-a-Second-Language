@@ -2,10 +2,14 @@ import torch
 import numpy as np
 from sklearn.metrics import precision_recall_curve, PrecisionRecallDisplay
 import matplotlib.pyplot as plt
-import os
+import os, argparse
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+parser = argparse.ArgumentParser(description='Get all command line arguments.')
+parser.add_argument('--name', type=str)
+
 
 def multiplots(predictions_list, targets_list, keys_list):
     """
@@ -35,6 +39,7 @@ def calculate_normalised_metrics(targets, y_pred_all, r=0.5):
             recall[i] += 0.01
     
     f_score_orig = (np.amax((1.+0.5**2) * ((precision * recall) / (0.5**2 * precision + recall))))
+    print("Original F0.5 scores are:", f_score_orig)
     targets, y_preds = torch.tensor(targets, device = 'cpu'), torch.tensor(y_preds, device = 'cpu')
     p_list = precision**(-1) - 1
     n_list = recall**(-1) - 1
@@ -63,7 +68,6 @@ def calculate_normalised_metrics(targets, y_pred_all, r=0.5):
     f_score = max(f_scores)
     
     print("Normalised F0.5 scores are:", f_score)
-    print("Original F0.5 scores are:", f_score_orig)
     save_predictions_prompt(f_score, targets, y_pred_all)
     
 
@@ -202,3 +206,12 @@ def save_model(model, avg_train_loss):
             print("Invalid response. Please enter 'y' or 'n'.")
             
     
+if __name__ == '__main__':
+    args = parser.parse_args()
+    # The targets have thus far been saved as 1.-targets, therefore reverse the operation before calculating the score
+    targets  = (np.loadtxt(args.name + "targets.txt").astype(np.int64))
+    predictions = (np.loadtxt(args.name + "preds.txt", dtype=float))
+    targets = 1.-targets
+    
+    # calculate_metrics(targets, predictions)
+    calculate_normalised_metrics(targets, predictions)

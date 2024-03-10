@@ -160,8 +160,8 @@ def load_dataset(args, images = True):
         
         # Stripping the arrays to match the formating 
         responses, prompts, topics = f0.readlines(), f1.readlines(), f2.readlines()
-        responses = [x.strip().lower() for x in responses[:-100]]
-        prompts = [x.strip().lower() for x in prompts[:-100]]
+        responses = [x.strip().lower() for x in responses]
+        prompts = [x.strip().lower() for x in prompts]
         topics = [x.strip().lower() for x in topics]
             
         # Optional labels dealt with, else target 1 is assigned to be permuted later
@@ -215,6 +215,7 @@ def permute_data(text_data, topics, args):
     if args.prompt_ids_path: 
         prompt_ids = open(args.prompt_ids_path).readlines()
         prompt_ids = [x.strip().lower() for x in prompt_ids[:len(text_data)]]
+        print(len(prompt_ids), len(text_data))
         assert(len(prompt_ids) == len(text_data))
     elif not args.labels_path:
         raise Exception("No prompt ids identified, permuting not possible.")
@@ -292,7 +293,7 @@ def encode_dataset(tokenizer, text_data, image_data):
         text_data.pop(index)
     return text_data, image_list
 
-
+# VERSION FOR PROMPT AND RESPONSE ENCODED AS ONE
 # def encode_data(tokenizer, data, MAX_LEN):
 #     input_ids, attention_mask = [], []
 #     input = data.prompt + data.response
@@ -305,6 +306,7 @@ def encode_dataset(tokenizer, text_data, image_data):
 #         attention_mask.append((encoding["attention_mask"]))
 #     return input_ids, attention_mask
 
+# VERSION FOR PROMPT AND RESPONSE ENCODED SEPARATELY AND THEN CONCATENATED
 def encode_data(tokenizer, data, MAX_LEN):
     input_ids, attention_mask = [], []
     prompt_encoding = tokenizer(data.prompt, padding="max_length", max_length = MAX_LEN, add_special_tokens=True)

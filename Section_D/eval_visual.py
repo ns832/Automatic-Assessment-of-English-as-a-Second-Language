@@ -12,7 +12,7 @@ from sentence_transformers import SentenceTransformer
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--folder_path', type=str, default=None, help='Load path of the folder containing prompts, responses etc.')
 parser.add_argument('--prompts_path', type=str, default=None, help='Load path of question training data')
-parser.add_argument('--resps_path', type=str, default=None, help='Load path of answer training data')
+parser.add_argument('--responses_path', type=str, default=None, help='Load path of answer training data')
 parser.add_argument('--prompt_ids_path', type=str, default=None, help='Load path of prompt ids')
 parser.add_argument('--topics_path', type=str, default=None, help='Load path of topics')
 parser.add_argument('--topic_dist_path', type=str, default=None, help='Load path of prompt distribution')
@@ -184,7 +184,7 @@ def main(num_labels=1):
 if __name__ == '__main__':
     if args.folder_path:
         if args.prompts_path == None: args.prompts_path = str(args.folder_path) + "prompts.txt"
-        if args.resps_path == None: args.resps_path = str(args.folder_path) + "responses.txt"
+        if args.responses_path == None: args.responses_path = str(args.folder_path) + "responses.txt"
         if args.topics_path == None: args.topics_path = str(args.folder_path) + "topics.txt"
         if args.topic_dist_path == None: args.topic_dist_path = str(args.folder_path) + "topics_dist.txt"
         if args.labels_path == None: args.labels_path = str(args.folder_path) + "targets.txt"

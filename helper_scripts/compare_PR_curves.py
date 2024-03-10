@@ -9,23 +9,23 @@ from numpy import inf
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 parser.add_argument('--batch_size_1', type=int, default=100, help='Specify the test batch size')
 parser.add_argument('--prompts_path_1', type=str, help='Load path to test prompts as text')
-parser.add_argument('--resps_path_1', type=str, help='Load path to test responses as text')
+parser.add_argument('--responses_path_1', type=str, help='Load path to test responses as text')
 parser.add_argument('--labels_path_1', type=str, help='Load path to labels')
 parser.add_argument('--model_path_1', type=str, help='Load path to trained model')
 parser.add_argument('--predictions_save_path_1', type=str, help="Where to save predicted values")
 parser.add_argument('--batch_size_2', type=int, default=100, help='Specify the test batch size')
 parser.add_argument('--prompts_path_2', type=str, help='Load path to test prompts as text')
-parser.add_argument('--resps_path_2', type=str, help='Load path to test responses as text')
+parser.add_argument('--responses_path_2', type=str, help='Load path to test responses as text')
 parser.add_argument('--labels_path_2', type=str, help='Load path to labels')
 parser.add_argument('--model_path_2', type=str, help='Load path to trained model')
 parser.add_argument('--predictions_save_path_2', type=str, help="Where to save predicted values")
 
 
 class arguments:
-    def __init__(self, batch_size, prompts_path, resps_path, labels_path, model_path, predictions_save_path):
+    def __init__(self, batch_size, prompts_path, responses_path, labels_path, model_path, predictions_save_path):
         self.batch_size = batch_size
         self.prompts_path = prompts_path
-        self.resps_path = resps_path
+        self.responses_path = responses_path
         self.labels_path = labels_path
         self.model_path = model_path
         self.predictions_save_path = predictions_save_path
@@ -126,17 +126,17 @@ def calculate_metrics(targets_1, y_pred_all_1, targets_2, y_pred_all_2):
 
 
 def main(args):
-    args1 = arguments(args.batch_size_1, args.prompts_path_1, args.resps_path_1, args.labels_path_1, args.model_path_1, args.predictions_save_path_1)
-    args2 = arguments(args.batch_size_2, args.prompts_path_2, args.resps_path_2, args.labels_path_2, args.model_path_2, args.predictions_save_path_2)
+    args1 = arguments(args.batch_size_1, args.prompts_path_1, args.responses_path_1, args.labels_path_1, args.model_path_1, args.predictions_save_path_1)
+    args2 = arguments(args.batch_size_2, args.prompts_path_2, args.responses_path_2, args.labels_path_2, args.model_path_2, args.predictions_save_path_2)
 
     device = eval_BERT.get_default_device()
     model_1, tokenizer_1 = eval_BERT.load_trained_model(args1, device)
     model_2, tokenizer_2 = eval_BERT.load_trained_model(args2, device)
-    prompt_ids_1, resp_ids_1, att_mask_prompts_1, att_mask_resps_1, targets_1 = eval_BERT.load_dataset(tokenizer_1, args1)
-    prompt_ids_2, resp_ids_2, att_mask_prompts_2, att_mask_resps_2, targets_2 = eval_BERT.load_dataset(tokenizer_2, args2)
+    prompt_ids_1, resp_ids_1, att_mask_prompts_1, att_mask_responses_1, targets_1 = eval_BERT.load_dataset(tokenizer_1, args1)
+    prompt_ids_2, resp_ids_2, att_mask_prompts_2, att_mask_responses_2, targets_2 = eval_BERT.load_dataset(tokenizer_2, args2)
 
-    targets_1, predictions_1 = eval_BERT.eval_model(args1, model_1, device, prompt_ids_1, resp_ids_1, att_mask_prompts_1, att_mask_resps_1, targets_1)
-    targets_2, predictions_2 = eval_BERT.eval_model(args2, model_2, device, prompt_ids_2, resp_ids_2, att_mask_prompts_2, att_mask_resps_2, targets_2)
+    targets_1, predictions_1 = eval_BERT.eval_model(args1, model_1, device, prompt_ids_1, resp_ids_1, att_mask_prompts_1, att_mask_responses_1, targets_1)
+    targets_2, predictions_2 = eval_BERT.eval_model(args2, model_2, device, prompt_ids_2, resp_ids_2, att_mask_prompts_2, att_mask_responses_2, targets_2)
     
     calculate_metrics(targets_1, predictions_1, targets_2, predictions_2)
     
