@@ -128,8 +128,8 @@ def main(args):
     prompt_ids, resp_ids, att_mask_prompts, att_mask_responses, targets = load_dataset(tokenizer, args)
     if args.groupings_path: 
         groups = np.loadtxt(args.groupings_path, dtype=int)
-        groups = torch.Tensor(groups)
-    else: groups == None
+    else: groups = np.arange(0, len(prompt_ids))
+    groups = torch.Tensor(groups)
     
     targets, y_pred_all = eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_mask_responses, targets, groups)
     metrics.calculate_metrics(targets, y_pred_all)
