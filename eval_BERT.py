@@ -15,6 +15,7 @@ parser.add_argument('--prompts_path', type=str, help='Load path to test prompts 
 parser.add_argument('--responses_path', type=str, help='Load path to test responses as text')
 parser.add_argument('--labels_path', type=str, help='Load path to labels')
 parser.add_argument('--model_path', type=str, help='Load path to trained model')
+parser.add_argument('--groupings_path', type=str, help='Load path to prompt groupings')
 parser.add_argument('--predictions_save_path', type=str, help="Where to save predicted values")
 
 def format_time(elapsed):
@@ -70,19 +71,20 @@ def encode_data(tokenizer, inputs, MAX_LEN):
     attention_mask.append(encoding["attention_mask"])
     return input_ids, attention_mask
 
-def eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_mask_responses, targets):
+def eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_mask_responses, targets, groups):
     prompt_ids = prompt_ids.squeeze(1)
     att_mask_prompts = att_mask_prompts.squeeze(1)
     resp_ids = resp_ids.squeeze(1)
     att_mask_responses = att_mask_responses.squeeze(1)
-    eval_dataset = TensorDataset(prompt_ids, att_mask_prompts, resp_ids, att_mask_responses, targets)
+    eval_dataset = TensorDataset(prompt_ids, att_mask_prompts, resp_ids, att_mask_responses, targets, groups)
     eval_dataloader = DataLoader(eval_dataset, batch_size = args.batch_size, shuffle = False)
 
     model.eval()    
     y_pred_all = []
+    y_pred_all_groups = []
     print("Started evaluation")
     
-    for prompt_id, att_mask_prompt, resp_id, att_mask_resp, target in eval_dataloader:
+    for prompt_id, att_mask_prompt, resp_id, att_mask_resp, target, group in eval_dataloader:
         pr_resp, pr_resp_msk = torch.cat((prompt_id, resp_id), 1), torch.cat((att_mask_prompt, att_mask_resp), 1)  
         pr_resp, pr_resp_msk = send_to_device(device, (pr_resp)), send_to_device(device, pr_resp_msk)        
         prompt_id, att_mask_prompt, resp_id, att_mask_resp, target = send_to_device(device, prompt_id), send_to_device(device, att_mask_prompt), send_to_device(device, resp_id) , send_to_device(device, att_mask_resp), send_to_device(device, target) 
@@ -95,9 +97,28 @@ def eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_
         logits = np.squeeze(logits[:, 1])
         logits = logits.tolist()
         y_pred_all += logits  
-        
+        y_pred_all_groups += group
+    
     y_pred_all = np.array(y_pred_all)
-    return targets, y_pred_all
+    y_pred_all_groups = np.array(y_pred_all_groups, dtype=int)
+    
+    combined_predictions = np.zeros(len(set(y_pred_all_groups)))
+    combined_predictions_count = np.zeros(len(set(y_pred_all_groups)), dtype=int)
+    combined_targets = np.zeros(len(set(y_pred_all_groups)), dtype=int)
+
+    for y_pred, group, target in zip(y_pred_all, y_pred_all_groups, targets):
+        if combined_predictions_count[group] == 0:
+            combined_targets[group] = target
+        else:
+            assert combined_targets[group] == target
+        combined_predictions[group] = combined_predictions[group] + y_pred
+        combined_predictions_count[group] = combined_predictions_count[group] + 1
+        # combined_predictions[group] = min(combined_predictions[group], y_pred)
+        
+    y_pred_all = [x / y for x,y in zip(combined_predictions, combined_predictions_count)]
+    y_pred_all = np.array(y_pred_all)
+    
+    return combined_targets, y_pred_all
 
 
     
@@ -105,7 +126,12 @@ def main(args):
     device = get_default_device()
     model, tokenizer = load_trained_model(args, device)
     prompt_ids, resp_ids, att_mask_prompts, att_mask_responses, targets = load_dataset(tokenizer, args)
-    targets, y_pred_all = eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_mask_responses, targets)
+    if args.groupings_path: 
+        groups = np.loadtxt(args.groupings_path, dtype=int)
+        groups = torch.Tensor(groups)
+    else: groups == None
+    
+    targets, y_pred_all = eval_model(args, model, device, prompt_ids, resp_ids, att_mask_prompts, att_mask_responses, targets, groups)
     metrics.calculate_metrics(targets, y_pred_all)
     metrics.calculate_normalised_metrics(targets, y_pred_all)
     return y_pred_all
