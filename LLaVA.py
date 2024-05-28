@@ -1,10 +1,14 @@
 import argparse
-from sklearn.metrics import precision_recall_curve
+import numpy.random as random
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import requests
 from io import BytesIO
+from PIL import Image
+from transformers import TextStreamer
+import Section_D.preprocess_data as preprocess_data
+import Section_D.metrics as metrics
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.conversation import conv_templates, SeparatorStyle
@@ -12,11 +16,6 @@ from llava.model.builder import load_pretrained_model
 from llava.utils import disable_torch_init
 from llava.mm_utils import process_images, tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
 
-from PIL import Image
-from PIL import Image
-from transformers import TextStreamer
-import Section_D.preprocess_data as preprocess_data
-import Section_D.metrics as metrics
 
 # An optional folder_path can be supplied if multiple files are in the same directory - any file_path not given is then assumed to be in this folder
 parser = argparse.ArgumentParser()
@@ -27,6 +26,7 @@ parser.add_argument('--prompt_ids_path', type=str, default=None, help='Load path
 parser.add_argument('--topic_dist_path', type=str, default=None, help='Load path of prompt distribution')
 parser.add_argument('--topics_path', type=str, default=None, help='Load path of topics')
 parser.add_argument('--labels_path', type=str, default=None ,help='Load path to labels')
+parser.add_argument('--groups_path', type=str, default=None, help='Load path of groups')
 
 # An optional image folder_path can be supplied if multiple image files are in the same directory - any file_path not given is then assumed to be in this folder
 parser.add_argument('--folder_path_images', type=str, default=None, help='Optional path for folder containing image data.')
@@ -42,6 +42,7 @@ parser.add_argument("--model-base", type=str, default=None)
 parser.add_argument("--conv-mode", type=str, default=None)
 parser.add_argument("--load-8bit", action="store_true")
 parser.add_argument("--load-4bit", action="store_true")
+parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
 
 
 # Global Variables
@@ -49,23 +50,11 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
 args = parser.parse_args()
 
-
-def get_targets(args, topics, text_data):
-    """
-        Creates targets for the two different types of testing; synthetic and real.
-        Real simply shuffles the dataset incase a smaller test is desired, synthetic 
-        isolates the on-topic answers, calls the permute_data() function and then shuffles.
-    """
-    
-    # If the data is not real, all the targets are on-topic therefore the dataset needs to be permuted
-    # if not args.labels_path:
-    #     print("No labels detected")
-    #     text_data = preprocess_data.permute_data(text_data, topics, args)
-    np.random.shuffle(text_data)
-    # text_data = text_data 
-    off_targets = [x for x in text_data if x.target == 0]
-    print("Dataset size: ", len(text_data) , "Proportions: ", len(off_targets) / len(text_data))
-    return text_data
+def set_seed(args):
+    seed_val = args.seed
+    random.seed(seed_val), np.random.seed(seed_val)
+    torch.manual_seed(seed_val), torch.cuda.manual_seed_all(seed_val)
+    return
 
 
 def create_prompts(text_data):
@@ -97,10 +86,17 @@ def eval_model(model, text_data, image_paths, image_processor, tokenizer):
     conv = conv_templates[conv_mode].copy()
 
     prob_list = []
+    target_list = []
+    group_list = []
+    
     LLaMA_prompt_list = [x.text for x in text_data]
     
     i = 0
-    for inp, image_path in zip(LLaMA_prompt_list, image_paths):
+    for data, image_path in zip(text_data, image_paths):
+        inp = data.text
+        target = data.target
+        group = data.group
+        
         print(i, " of ", len(LLaMA_prompt_list))
         i += 1
         if image_path.startswith('http://') or image_path.startswith('https://'):
@@ -124,6 +120,7 @@ def eval_model(model, text_data, image_paths, image_processor, tokenizer):
         prompt = conv.get_prompt()
 
         input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(model.device)
+        print(len(input_ids))
         stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
         keywords = [stop_str]
         stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
@@ -137,7 +134,6 @@ def eval_model(model, text_data, image_paths, image_processor, tokenizer):
                 max_new_tokens=1, 
                 streamer=streamer,
                 use_cache=False, 
-                # do_sample = False, temperature = 0
                 output_scores=True, 
                 no_repeat_ngram_size = 1, 
                 stopping_criteria=[stopping_criteria])
@@ -145,10 +141,31 @@ def eval_model(model, text_data, image_paths, image_processor, tokenizer):
         logits = np.array(output.scores[0].cpu())
         on_prob = get_probabilities(logits, on_token, off_token)    
         prob_list.append(on_prob)    
+        group_list.append(group)
+        target_list.append(target)
 
         # If you don't reset conv then it will throw up issues as this template is designed for one image being fed in and then only text conversation after
         conv = conv_templates[conv_mode].copy()
-    return prob_list
+        
+    y_pred_all = np.array(prob_list)
+    y_pred_all_groups = np.array(group_list, dtype=int)
+
+    combined_predictions = np.zeros(len(set(y_pred_all_groups)))
+    combined_predictions_count = np.zeros(len(set(y_pred_all_groups)), dtype=int)
+    combined_targets = np.zeros(len(set(y_pred_all_groups)), dtype=int)
+
+    for y_pred, group, target in zip(y_pred_all, y_pred_all_groups, target_list):
+        if combined_predictions_count[group] == 0:
+            combined_targets[group] = target
+        else:
+            assert combined_targets[group] == target
+        combined_predictions[group] = combined_predictions[group] + y_pred
+        combined_predictions_count[group] = combined_predictions_count[group] + 1
+        
+    y_pred_all = [x / y for x,y in zip(combined_predictions, combined_predictions_count)]
+    y_pred_all = np.array(y_pred_all)
+    
+    return combined_targets, y_pred_all
 
 
 def get_probabilities(logits, on_token, off_token):
@@ -164,12 +181,18 @@ def get_probabilities(logits, on_token, off_token):
 
 
 def main(args):
+    set_seed(args)
     # Preprocess textual data
-    if args.images_path: text_data, image_data, topics = preprocess_data.load_dataset(args)
-    else: text_data, image_data, topics = preprocess_data.load_dataset(args, images=False)
-    text_data = get_targets(args, topics, text_data)
+    if args.images_path: text_data, image_data, __ = preprocess_data.load_dataset(args)
+    else: text_data, image_data, __ = preprocess_data.load_dataset(args, images=False)
     if args.images_path: text_data = preprocess_data.remove_incomplete_data(text_data, image_data)
 
+    if args.groups_path: 
+        groups = np.loadtxt(args.groups_path, dtype=int)
+    else: groups = np.arange(0, len(text_data))
+    for data, group in zip(text_data, groups):
+        data.group =  group
+        
     # Get model, tokenizer and image processor
     model_name = "liuhaotian/llava-v1.5-7b"
     tokenizer, model, image_processor, __ = load_pretrained_model(model_name, args.model_base, model_name, args.load_8bit, args.load_4bit, device=device)
@@ -190,19 +213,26 @@ def main(args):
         if args.overlay == True:
             print("Assigning all images to the composite")
             composite_path = "/scratches/dialfs/alta/relevance/ns832/data/visual_and_text/BLXXXgrp24_CDE.rnnlm/complete_data/overlay.jpg"
-            image_paths = [composite_path for __ in image_list]
+            image_paths = [composite_path for __ in text_data]
         else:
             print("Assigning all images to a blank one")
             file = 'https://upload.wikimedia.org/wikipedia/commons/a/a7/Blank_image.jpg'
             # file = 'https://upload.wikimedia.org/wikipedia/commons/e/eb/Blank.jpg'
             image_paths = [file for __ in text_data]
     text_data = create_prompts(text_data)
-
+    
+    # Shuffle
+    indices = list(range(len(text_data)))
+    random.shuffle(indices)
+    text_data = [text_data[i] for i in indices]
+    image_paths = [image_paths[i] for i in indices]
+    
     # Model
-    prob_list = eval_model(model, text_data, image_paths, image_processor, tokenizer)
+    targets, prob_list = eval_model(model, text_data, image_paths, image_processor, tokenizer)
     prob_list = np.array(prob_list)
+    targets = np.array(targets)
  
-    targets = np.array([x.target for x in text_data])
+    # targets = np.array([x.target for x in text_data])
     metrics.calculate_metrics(targets, prob_list)
     metrics.calculate_normalised_metrics(targets, prob_list)
         

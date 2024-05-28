@@ -2,9 +2,10 @@ import argparse
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler
 import numpy as np
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, pipeline, TextStreamer
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, TextStreamer
 import Section_D.preprocess_data as preprocess_data
 import Section_D.metrics as metrics
+import numpy.random as random
 
 # An optional folder_path can be supplied if multiple files are in the same directory - any file_path not given is then assumed to be in this folder
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
@@ -14,7 +15,9 @@ parser.add_argument('--responses_path', type=str, default=None, help='Load path 
 parser.add_argument('--prompt_ids_path', type=str, default=None, help='Load path of prompt ids')
 parser.add_argument('--topic_dist_path', type=str, default=None, help='Load path of prompt distribution')
 parser.add_argument('--topics_path', type=str, default=None, help='Load path of topics')
+parser.add_argument('--groups_path', type=str, default=None, help='Load path of groups')
 parser.add_argument('--labels_path', type=str, default=None ,help='Load path to labels')
+parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
 
 
 # Global Variables
@@ -22,13 +25,18 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
 args = parser.parse_args()
 
-
+def set_seed(args):
+    seed_val = args.seed
+    random.seed(seed_val), np.random.seed(seed_val)
+    torch.manual_seed(seed_val), torch.cuda.manual_seed_all(seed_val)
+    return
 
 def initialise_model(model_name = "mistralai/Mistral-7B-v0.1"):
     """
         Instantiates the tokeniser and model. Configuration for the two is set here.
     """
     # Load in the tokenizer and set pad token
+    model_name = "HuggingFaceH4/zephyr-7b-beta"
     tokenizer = AutoTokenizer.from_pretrained(model_name,add_special_tokens=True)
     tokenizer.pad_token = tokenizer.eos_token
     
@@ -45,7 +53,6 @@ def initialise_model(model_name = "mistralai/Mistral-7B-v0.1"):
             quantization_config=bnb_config,
             torch_dtype=torch.bfloat16,
             device_map="auto",
-            trust_remote_code=True,
     )  
     return model, tokenizer
 
@@ -57,12 +64,7 @@ def create_prompts(text_data):
     """    
     # Iterates through the text_data list and creates prompts to feed into the model
     for data in  text_data :
-        Mistral_prompt = """<s>[INST] Respond to the prompts with only 'On' or 'Off' depending on if the answer is relevant to the question asked. For instance:
-                        [Question] this chart shows the number of positive and negative responses given in a survey concerning customer satisfaction with a hotel look at the information and talk about the results of the customer survey.
-                        [Answer] this charts present results of survey in hotel most negative response was given about the value for money it was about about nine hundred person and the best results get response for question about attitude of staff it was at about nine hundred and half percent and at about half of respondents talk that parking is positive and at about. 
-                        Would be converted to:[/INST] On </s>
-                        [INST] [Question] """ + data.prompt.strip().lower().replace("</s>", "") + """. 
-                        [Answer] """  + data.response.strip().lower().replace("</s>", "") + ". [/INST]"
+        Mistral_prompt = """<s>[INST] Respond to the prompts with only 'On' or 'Off' depending on if the answer is relevant to the question asked </s> [Question] """ + data.prompt.strip().lower().replace("</s>", "") + """. [Answer] """  + data.response.strip().lower().replace("</s>", "") + ". [/INST]"
         data.text = Mistral_prompt
     # Print a random prompt to check the format of the question is as desired
     print("Random prompt: ", text_data[np.random.randint(0, len(text_data))].text)
@@ -83,9 +85,10 @@ def create_dataloader(tokenizer, text_data, device):
     text = torch.tensor([x.text for x in text_data])
     mask = torch.tensor([x.mask for x in text_data])
     target = torch.tensor([x.target for x in text_data])
+    group = torch.tensor([x.group for x in text_data])
     
     # Put the data into a DataLoader
-    train_data = TensorDataset(text, mask, target)
+    train_data = TensorDataset(text, mask, target, group)
     # train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, batch_size=1)
     
@@ -98,8 +101,10 @@ def model_generate(model, tokenizer, device, train_dataloader):
         From there the outputs are passed through get_probabilities() to extract the probability of 
         an 'on topic' response.
     """
-    # Initialise empty array and streamer to automatically show the decoded model output
+    # Initialise empty array and streamer to automatically show the decoded model output. 
+    # Group refers to the set of 5 questions that make up a full question.
     on_probabilities = []
+    groups, targets = [], []
     streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
     
     # Iterate through the dataloder and feed the prompts into the model
@@ -110,20 +115,44 @@ def model_generate(model, tokenizer, device, train_dataloader):
             output = model.generate(input_ids=b_input_ids, 
                                     attention_mask=b_att_msks, 
                                     pad_token_id=tokenizer.eos_token_id,
-                                    do_sample = False, # temperature = 0
+                                    do_sample = False,
                                     return_dict_in_generate=True,
                                     max_new_tokens=1,
                                     streamer=streamer,
                                     output_scores=True, 
                                     use_cache=False)
-            # Use lmodel scores to get the probability for 'On' via get_probabilities()
+            # Use model scores to get the probability for 'On' via get_probabilities()
             print(step, " of ", len(train_dataloader), " Target: ", batch[2])
+            targets += batch[2]
+            groups += batch[3]
             scores = (output.scores)[0].cpu().numpy()
             for score in scores:
                 logits = np.array(score)
                 on_probabilities.append(get_probabilities(logits, tokenizer))
-    # np.savetxt("/scratches/dialfs/alta/relevance/ns832/results/prediction_scores/LLaMA_predictions.txt", on_probabilities)         
-    return on_probabilities
+                
+    # Get two arrays, one with the probabilities and the other with which group it corresponds to
+    on_probabilities = np.array(on_probabilities)
+    groups = np.array(groups, dtype=int)
+    targets = np.array(targets, dtype=int)
+    
+    # Instantiate empty arrays which are used to store the cumulative probabilities & counts
+    combined_predictions = np.zeros(len(set(groups)))
+    combined_predictions_count = np.zeros(len(set(groups)), dtype=int)
+    combined_targets = np.zeros(len(set(groups)), dtype=int)
+
+    # Collate all probabilities corresponding to the same group, counting the instances in combined_predictions_count
+    for prob, group, target in zip(on_probabilities, groups, targets):
+        if combined_predictions_count[group] == 0:
+            combined_targets[group] = target
+        else:
+            assert combined_targets[group] == target
+        combined_predictions[group] = combined_predictions[group] + prob
+        combined_predictions_count[group] = combined_predictions_count[group] + 1
+
+    on_probabilities = [x / y for x,y in zip(combined_predictions, combined_predictions_count)]
+    on_probabilities = np.array(on_probabilities)
+
+    return on_probabilities, combined_targets
 
 
 def get_probabilities(logits, tokenizer):
@@ -146,21 +175,29 @@ def get_probabilities(logits, tokenizer):
 
 def main(args):
     # Instantiate model and tokenizer
+    set_seed(args)
     model, tokenizer = initialise_model()
     
     # Load dataset and shuffle data before creating prompts
     text_data, __ , __ = preprocess_data.load_dataset(args, images = False)
+    
+    # Only Section E needs to worry about groups, hence if no groups are input each input is simply given a distinct group
+    if args.groups_path: 
+        groups = np.loadtxt(args.groups_path, dtype=int)
+    else: groups = np.arange(0, len(text_data))
+    for data, group in zip(text_data, groups):
+        data.group =  group
+        
     # Shuffling is done here (as well as during create_dataloader()) if only a subsection of the data is used for testing purposes
     np.random.shuffle(text_data)
     text_data = create_prompts(text_data)
     
     # Run the evaluation and obtain scores for 'On-topic'
     train_dataloader = create_dataloader(tokenizer, text_data, device)
-    on_probabilities = model_generate(model, tokenizer, device, train_dataloader)   
+    on_probabilities, targets = model_generate(model, tokenizer, device, train_dataloader)   
     prob_list = np.array(on_probabilities)
  
     # Create Precision-Recall Graph
-    targets = np.array([x.target for x in text_data])
     metrics.calculate_metrics(targets, prob_list)
     metrics.calculate_normalised_metrics(targets, prob_list)
 
